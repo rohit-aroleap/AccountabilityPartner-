@@ -1,6 +1,6 @@
 import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
-import { SYSTEM_PROMPT, buildDraftPrompt } from './prompt.js';
+import { SYSTEM_COACH, SYSTEM_REPLY, buildDraftPrompt } from './prompt.js';
 import { loadSettings } from './storage.js';
 
 const els = {};
@@ -52,10 +52,13 @@ function renderShell(c) {
         <div class="chat-status">Loading messages…</div>
       </div>
       <form class="chat-composer" id="chat-composer">
-        <button type="button" class="icon-btn draft-btn" id="chat-draft" title="Draft with AI (Cmd/Ctrl + J)">&#x2728;</button>
+        <div class="draft-btns">
+          <button type="button" class="draft-btn coach" id="chat-draft-coach" title="Coach: workout accountability (Ctrl/Cmd+J)">&#x1F4AA;</button>
+          <button type="button" class="draft-btn" id="chat-draft-reply" title="Reply: natural continuation">&#x1F4AC;</button>
+        </div>
         <textarea
           id="chat-input"
-          placeholder="Type a message, or click ✨ to draft with AI…"
+          placeholder="Type a message, or click 💪 / 💬 to draft with AI…"
           rows="1"
           autocomplete="off"
         ></textarea>
@@ -65,7 +68,8 @@ function renderShell(c) {
   `;
   document.getElementById('chat-refresh').addEventListener('click', () => refreshMessages({ scroll: true }));
   document.getElementById('chat-composer').addEventListener('submit', onSend);
-  document.getElementById('chat-draft').addEventListener('click', onDraft);
+  document.getElementById('chat-draft-coach').addEventListener('click', () => onDraft('coach'));
+  document.getElementById('chat-draft-reply').addEventListener('click', () => onDraft('reply'));
   const input = document.getElementById('chat-input');
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {
@@ -74,7 +78,7 @@ function renderShell(c) {
       document.getElementById('chat-composer').requestSubmit();
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
       e.preventDefault();
-      onDraft();
+      onDraft('coach');
     }
   });
 }
@@ -136,25 +140,28 @@ async function onSend(e) {
   }
 }
 
-async function onDraft() {
+async function onDraft(mode) {
   if (!activeCustomer) return;
   const input = document.getElementById('chat-input');
-  const btn = document.getElementById('chat-draft');
+  const coachBtn = document.getElementById('chat-draft-coach');
+  const replyBtn = document.getElementById('chat-draft-reply');
   const sendBtn = document.getElementById('chat-send');
   const intent = input.value.trim();
+  const activeBtn = mode === 'coach' ? coachBtn : replyBtn;
 
-  btn.disabled = true;
+  coachBtn.disabled = true;
+  replyBtn.disabled = true;
   sendBtn.disabled = true;
-  btn.classList.add('busy');
+  activeBtn.classList.add('busy');
   const previousValue = input.value;
   input.value = '';
-  input.placeholder = 'Drafting…';
+  input.placeholder = mode === 'coach' ? 'Coaching…' : 'Drafting reply…';
 
   try {
     const { anthropicModel } = loadSettings();
-    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent });
+    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode });
     const draft = await generateMessage({
-      system: SYSTEM_PROMPT,
+      system: mode === 'coach' ? SYSTEM_COACH : SYSTEM_REPLY,
       userPrompt,
       model: anthropicModel,
       maxTokens: 600,
@@ -166,10 +173,11 @@ async function onDraft() {
     input.value = previousValue;
     showError(err.message);
   } finally {
-    btn.disabled = false;
+    coachBtn.disabled = false;
+    replyBtn.disabled = false;
     sendBtn.disabled = false;
-    btn.classList.remove('busy');
-    input.placeholder = 'Type a message, or click ✨ to draft with AI…';
+    activeBtn.classList.remove('busy');
+    input.placeholder = 'Type a message, or click 💪 / 💬 to draft with AI…';
   }
 }
 
