@@ -1,4 +1,4 @@
-export const APP_VERSION = 'v1.003';
+export const APP_VERSION = 'v1.004';
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-version]').forEach(el => {
