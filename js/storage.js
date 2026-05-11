@@ -2,8 +2,6 @@ const KEY = 'ap.settings.v1';
 
 const DEFAULTS = {
   workerUrl: '',
-  periskopeToken: '',
-  periskopePhone: '',
   anthropicKey: '',
   anthropicModel: 'claude-opus-4-7',
   customerPhonesRaw: '',

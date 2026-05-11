@@ -1,8 +1,8 @@
 import { loadSettings, parseCustomerPhones } from './storage.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
+import { openChatFor, closeChat } from './chat.js';
 
 const els = {};
-let activePhone = null;
 let allCustomers = [];
 
 export function initCustomers() {
@@ -12,6 +12,14 @@ export function initCustomers() {
 }
 
 export async function refresh() {
+  closeChat();
+  els.chatPane.innerHTML = `
+    <div class="empty-chat">
+      <h2>Pick a customer to start a conversation</h2>
+      <p>Messages send via Periskope through your Worker proxy.</p>
+    </div>
+  `;
+
   const { workerUrl, customerPhonesRaw } = loadSettings();
   const phones = parseCustomerPhones(customerPhonesRaw);
 
@@ -37,9 +45,7 @@ export async function refresh() {
 
 function buildRow(idx, phone) {
   const user = idx.byPhone.get(normalizePhone(phone));
-  if (!user) {
-    return { phone, found: false };
-  }
+  if (!user) return { phone, found: false };
   const recent = getRecentDailyActivity(idx, user.uid, 1);
   return {
     phone,
@@ -77,9 +83,7 @@ function rowHtml(c) {
       <div class="cust-row missing" data-phone="${escapeAttr(c.phone)}">
         <div class="avatar avatar-missing">?</div>
         <div class="cust-body">
-          <div class="cust-top">
-            <span class="cust-name">${escapeHtml(c.phone)}</span>
-          </div>
+          <div class="cust-top"><span class="cust-name">${escapeHtml(c.phone)}</span></div>
           <div class="cust-sub">Not in workout data</div>
         </div>
       </div>
@@ -111,15 +115,10 @@ function rowHtml(c) {
 }
 
 function onSelect(phone) {
-  activePhone = phone;
   els.list.querySelectorAll('.cust-row').forEach(el => {
     el.classList.toggle('active', el.dataset.phone === phone);
   });
   const c = allCustomers.find(x => x.phone === phone);
-  renderChatPreview(c);
-}
-
-function renderChatPreview(c) {
   if (!c) return;
   if (!c.found) {
     els.chatPane.innerHTML = `
@@ -130,17 +129,7 @@ function renderChatPreview(c) {
     `;
     return;
   }
-  els.chatPane.innerHTML = `
-    <div class="empty-chat">
-      <h2>${escapeHtml(c.name)}</h2>
-      <p>
-        ${escapeHtml(c.tierLabel || '')} • Habit score ${Math.round(c.habitScore ?? 0)} • Last active ${escapeHtml(c.lastActiveDate || '—')}<br/>
-        Streak: ${c.streak?.active ? `${c.streak.days} day${c.streak.days === 1 ? '' : 's'}` : 'inactive'}<br/>
-        Today: ${c.todayExercises} exercise${c.todayExercises === 1 ? '' : 's'}
-      </p>
-      <p style="margin-top:18px;font-size:12px;">Chat UI lands in v1.003.</p>
-    </div>
-  `;
+  openChatFor(c);
 }
 
 function escapeHtml(s) {

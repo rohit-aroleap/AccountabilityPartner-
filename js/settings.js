@@ -39,8 +39,6 @@ function closeModal() {
 function hydrateForm() {
   const s = loadSettings();
   els.form.workerUrl.value = s.workerUrl;
-  els.form.periskopeToken.value = s.periskopeToken;
-  els.form.periskopePhone.value = s.periskopePhone;
   els.form.anthropicKey.value = s.anthropicKey;
   els.form.anthropicModel.value = s.anthropicModel;
   els.form.customerPhonesRaw.value = s.customerPhonesRaw;
@@ -51,8 +49,6 @@ function onSave(e) {
   const data = new FormData(els.form);
   saveSettings({
     workerUrl: data.get('workerUrl').trim().replace(/\/+$/, ''),
-    periskopeToken: data.get('periskopeToken').trim(),
-    periskopePhone: data.get('periskopePhone').trim(),
     anthropicKey: data.get('anthropicKey').trim(),
     anthropicModel: data.get('anthropicModel').trim() || 'claude-opus-4-7',
     customerPhonesRaw: data.get('customerPhonesRaw'),

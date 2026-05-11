@@ -1,5 +1,6 @@
 const FERRA_EXPORT_URL =
   'https://asia-south1-aroleap-fa76f.cloudfunctions.net/exportFerraDashboard';
+const PERISKOPE_BASE = 'https://api.periskope.app/v1';
 
 const ALLOWED_ORIGINS = new Set([
   'https://rohit-aroleap.github.io',
@@ -19,15 +20,21 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    if (url.pathname === '/workout' || url.pathname === '/workout/') {
-      return handleWorkout(request, env, corsHeaders);
+    try {
+      if (url.pathname === '/health') return json({ ok: true }, corsHeaders);
+      if (url.pathname === '/workout' || url.pathname === '/workout/') {
+        return handleWorkout(request, env, corsHeaders);
+      }
+      if (url.pathname === '/periskope/send') {
+        return handlePeriskopeSend(request, env, corsHeaders);
+      }
+      if (url.pathname === '/periskope/messages') {
+        return handlePeriskopeMessages(request, env, corsHeaders);
+      }
+      return json({ error: 'Not found', path: url.pathname }, corsHeaders, 404);
+    } catch (err) {
+      return json({ error: 'Worker exception', message: err.message }, corsHeaders, 500);
     }
-
-    if (url.pathname === '/health') {
-      return json({ ok: true }, corsHeaders);
-    }
-
-    return json({ error: 'Not found' }, corsHeaders, 404);
   },
 };
 
@@ -35,10 +42,8 @@ async function handleWorkout(request, env, corsHeaders) {
   if (!env.FERRA_API_KEY) {
     return json({ error: 'FERRA_API_KEY secret not set on Worker' }, corsHeaders, 500);
   }
-
   const includeExerciseDb =
     new URL(request.url).searchParams.get('includeExerciseDb') !== 'false';
-
   const upstream = new URL(FERRA_EXPORT_URL);
   upstream.searchParams.set('includeExerciseDb', String(includeExerciseDb));
 
@@ -46,7 +51,6 @@ async function handleWorkout(request, env, corsHeaders) {
     headers: { 'x-api-key': env.FERRA_API_KEY },
     cf: { cacheTtl: 60, cacheEverything: true },
   });
-
   if (!res.ok) {
     const body = await res.text();
     return json(
@@ -55,7 +59,6 @@ async function handleWorkout(request, env, corsHeaders) {
       502,
     );
   }
-
   return new Response(res.body, {
     status: 200,
     headers: {
@@ -64,6 +67,82 @@ async function handleWorkout(request, env, corsHeaders) {
       'cache-control': 'private, max-age=30',
     },
   });
+}
+
+async function handlePeriskopeSend(request, env, corsHeaders) {
+  if (request.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  }
+  const cfg = periskopeConfig(env);
+  if (cfg.error) return json({ error: cfg.error }, corsHeaders, 500);
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'Invalid JSON body' }, corsHeaders, 400);
+  }
+  if (!body.chat_id || !body.message) {
+    return json({ error: 'chat_id and message are required' }, corsHeaders, 400);
+  }
+
+  const res = await fetch(`${PERISKOPE_BASE}/message/send`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${cfg.token}`,
+      'x-phone': cfg.phone,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: body.chat_id,
+      message: body.message,
+      ...(body.reply_to ? { reply_to: body.reply_to } : {}),
+    }),
+  });
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+async function handlePeriskopeMessages(request, env, corsHeaders) {
+  if (request.method !== 'GET') {
+    return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  }
+  const cfg = periskopeConfig(env);
+  if (cfg.error) return json({ error: cfg.error }, corsHeaders, 500);
+
+  const params = new URL(request.url).searchParams;
+  const chatId = params.get('chat_id');
+  if (!chatId) return json({ error: 'chat_id query param required' }, corsHeaders, 400);
+
+  const limit = Math.min(parseInt(params.get('limit') || '50', 10) || 50, 2000);
+  const offset = parseInt(params.get('offset') || '0', 10) || 0;
+
+  const upstream = new URL(
+    `${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}/messages`,
+  );
+  upstream.searchParams.set('limit', String(limit));
+  upstream.searchParams.set('offset', String(offset));
+
+  const res = await fetch(upstream.toString(), {
+    headers: {
+      'Authorization': `Bearer ${cfg.token}`,
+      'x-phone': cfg.phone,
+    },
+  });
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+function periskopeConfig(env) {
+  if (!env.PERISKOPE_API_KEY) return { error: 'PERISKOPE_API_KEY secret not set on Worker' };
+  if (!env.PERISKOPE_PHONE) return { error: 'PERISKOPE_PHONE secret not set on Worker' };
+  return { token: env.PERISKOPE_API_KEY, phone: env.PERISKOPE_PHONE };
 }
 
 function buildCorsHeaders(origin) {

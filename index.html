@@ -24,7 +24,7 @@
     <main class="chat-pane">
       <div class="empty-chat">
         <h2>Pick a customer to start a conversation</h2>
-        <p>Messages are sent on your behalf via Periskope. AI replies use your Claude API key.</p>
+        <p>Messages send via Periskope through your Worker proxy.</p>
       </div>
     </main>
   </div>
@@ -45,7 +45,7 @@
           <div class="field">
             <label for="workerUrl">Cloudflare Worker URL</label>
             <input type="url" id="workerUrl" name="workerUrl" placeholder="https://accountability-partner.your-subdomain.workers.dev" autocomplete="off" />
-            <div class="help">Proxies the Ferra workout export. Deploy <code>worker/worker.js</code> and set the <code>FERRA_API_KEY</code> secret.</div>
+            <div class="help">Proxies Ferra workout export + Periskope send/receive. Set <code>FERRA_API_KEY</code>, <code>PERISKOPE_API_KEY</code>, <code>PERISKOPE_PHONE</code> as Worker secrets.</div>
           </div>
           <div class="field">
             <label for="customerPhonesRaw">Customer phone numbers (one per line)</label>
@@ -53,17 +53,9 @@
             <div class="help">Allowlist — only these phones appear in the sidebar. Matched against the Ferra export.</div>
           </div>
           <div class="field">
-            <label for="periskopeToken">Periskope API Token</label>
-            <input type="password" id="periskopeToken" name="periskopeToken" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="periskopePhone">Periskope Channel Phone (your number)</label>
-            <input type="text" id="periskopePhone" name="periskopePhone" placeholder="+91XXXXXXXXXX" autocomplete="off" />
-          </div>
-          <div class="field">
             <label for="anthropicKey">Anthropic API Key</label>
             <input type="password" id="anthropicKey" name="anthropicKey" autocomplete="off" />
-            <div class="help">Stored in this device's localStorage only.</div>
+            <div class="help">Used in v1.004 onward for AI message drafting. Stored in this device's localStorage.</div>
           </div>
           <div class="field">
             <label for="anthropicModel">Claude Model</label>
