@@ -80,11 +80,11 @@ function renderList(rows) {
 function rowHtml(c) {
   if (!c.found) {
     return `
-      <div class="cust-row missing" data-phone="${escapeAttr(c.phone)}">
+      <div class="cust-row" data-phone="${escapeAttr(c.phone)}">
         <div class="avatar avatar-missing">?</div>
         <div class="cust-body">
           <div class="cust-top"><span class="cust-name">${escapeHtml(c.phone)}</span></div>
-          <div class="cust-sub">Not in workout data</div>
+          <div class="cust-sub"><span class="cust-segment">No workout history yet</span></div>
         </div>
       </div>
     `;
@@ -120,15 +120,6 @@ function onSelect(phone) {
   });
   const c = allCustomers.find(x => x.phone === phone);
   if (!c) return;
-  if (!c.found) {
-    els.chatPane.innerHTML = `
-      <div class="empty-chat">
-        <h2>${escapeHtml(c.phone)}</h2>
-        <p>This phone number isn't in the Ferra workout export.</p>
-      </div>
-    `;
-    return;
-  }
   openChatFor(c);
 }
 

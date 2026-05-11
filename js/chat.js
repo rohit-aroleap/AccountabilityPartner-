@@ -25,16 +25,20 @@ export function closeChat() {
 }
 
 function renderShell(c) {
-  const initial = (c.name || c.phone || '?').trim().charAt(0).toUpperCase();
+  const initial = c.found
+    ? (c.name || c.phone || '?').trim().charAt(0).toUpperCase()
+    : '?';
+  const avatarCls = c.found ? 'avatar' : 'avatar avatar-missing';
+  const sub = c.found
+    ? `Habit ${Math.round(c.habitScore ?? 0)} • ${escapeHtml(c.tierLabel || '')} • Last ${escapeHtml(c.lastActiveDate || '—')}`
+    : `${escapeHtml(c.phone)} • No workout history yet`;
   els.pane.innerHTML = `
     <div class="chat">
       <header class="chat-header">
-        <div class="avatar">${escapeHtml(initial)}</div>
+        <div class="${avatarCls}">${escapeHtml(initial)}</div>
         <div class="chat-header-info">
           <div class="chat-header-name">${escapeHtml(c.name || c.phone)}</div>
-          <div class="chat-header-sub">
-            ${c.found ? `Habit ${Math.round(c.habitScore ?? 0)} • ${escapeHtml(c.tierLabel || '')} • Last ${escapeHtml(c.lastActiveDate || '—')}` : escapeHtml(c.phone)}
-          </div>
+          <div class="chat-header-sub">${sub}</div>
         </div>
         <button class="icon-btn" id="chat-refresh" title="Refresh">&#x21bb;</button>
       </header>
