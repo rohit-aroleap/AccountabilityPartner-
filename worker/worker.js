@@ -1,6 +1,14 @@
 const FERRA_EXPORT_URL =
   'https://asia-south1-aroleap-fa76f.cloudfunctions.net/exportFerraDashboard';
 const PERISKOPE_BASE = 'https://api.periskope.app/v1';
+const ANTHROPIC_BASE = 'https://api.anthropic.com/v1';
+const ANTHROPIC_VERSION = '2023-06-01';
+const ALLOWED_MODELS = new Set([
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5-20251001',
+]);
+const DEFAULT_MODEL = 'claude-opus-4-7';
 
 const ALLOWED_ORIGINS = new Set([
   'https://rohit-aroleap.github.io',
@@ -30,6 +38,9 @@ export default {
       }
       if (url.pathname === '/periskope/messages') {
         return handlePeriskopeMessages(request, env, corsHeaders);
+      }
+      if (url.pathname === '/anthropic/messages') {
+        return handleAnthropic(request, env, corsHeaders);
       }
       return json({ error: 'Not found', path: url.pathname }, corsHeaders, 404);
     } catch (err) {
@@ -131,6 +142,48 @@ async function handlePeriskopeMessages(request, env, corsHeaders) {
       'Authorization': `Bearer ${cfg.token}`,
       'x-phone': cfg.phone,
     },
+  });
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+async function handleAnthropic(request, env, corsHeaders) {
+  if (request.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  }
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: 'ANTHROPIC_API_KEY secret not set on Worker' }, corsHeaders, 500);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'Invalid JSON body' }, corsHeaders, 400);
+  }
+  if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+    return json({ error: 'messages array required' }, corsHeaders, 400);
+  }
+
+  const model = ALLOWED_MODELS.has(body.model) ? body.model : DEFAULT_MODEL;
+  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 512, 16), 2048);
+
+  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: 'POST',
+    headers: {
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': ANTHROPIC_VERSION,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      system: body.system || '',
+      messages: body.messages,
+    }),
   });
   const text = await res.text();
   return new Response(text, {

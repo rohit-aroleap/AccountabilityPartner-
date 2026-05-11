@@ -475,6 +475,32 @@ form input:focus, form select:focus, form textarea:focus {
   cursor: not-allowed;
 }
 
+.draft-btn {
+  font-size: 18px;
+  color: var(--accent);
+  flex-shrink: 0;
+  padding: 6px 8px;
+  align-self: center;
+}
+
+.draft-btn:hover {
+  background: var(--panel);
+  color: var(--accent-hover);
+}
+
+.draft-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.draft-btn.busy {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .help {
   font-size: 11px;
   color: var(--muted);

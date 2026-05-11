@@ -8,6 +8,7 @@ Thin proxy holding API keys server-side and serving CORS-friendly JSON to the st
 - `GET /workout?includeExerciseDb=true|false` — Ferra dashboard export (injects `x-api-key`)
 - `POST /periskope/send` — body `{ chat_id, message, reply_to? }` → Periskope `/v1/message/send`
 - `GET /periskope/messages?chat_id=<id>&limit=&offset=` → Periskope `/v1/chats/{id}/messages`
+- `POST /anthropic/messages` — body `{ system, messages, model?, max_tokens? }` → Anthropic `/v1/messages`
 
 ## Required secrets
 
@@ -15,7 +16,8 @@ Thin proxy holding API keys server-side and serving CORS-friendly JSON to the st
 |---|---|
 | `FERRA_API_KEY` | Ferra export key (`ferra-cust-data-27`) |
 | `PERISKOPE_API_KEY` | The full `eyJ…` token from console.periskope.app |
-| `PERISKOPE_PHONE` | Your channel phone, country code + number, no `+`/spaces (e.g., `919187651332`) |
+| `PERISKOPE_PHONE` | Channel phone, country code + number, no `+`/spaces (e.g., `919187651332`) |
+| `ANTHROPIC_API_KEY` | Anthropic API key from console.anthropic.com |
 
 ## Deploy
 
@@ -25,17 +27,18 @@ Thin proxy holding API keys server-side and serving CORS-friendly JSON to the st
 npm install -g wrangler
 cd worker
 wrangler login                                # one-time
-wrangler secret put FERRA_API_KEY              # paste: ferra-cust-data-27
-wrangler secret put PERISKOPE_API_KEY          # paste full eyJ… token
-wrangler secret put PERISKOPE_PHONE            # paste: 919187651332
+wrangler secret put FERRA_API_KEY              # if not set yet
+wrangler secret put PERISKOPE_API_KEY          # if not set yet
+wrangler secret put PERISKOPE_PHONE            # if not set yet
+wrangler secret put ANTHROPIC_API_KEY          # new for v1.006
 wrangler deploy
 ```
 
 ### B. Cloudflare dashboard (no CLI)
 
-1. Cloudflare → Workers & Pages → your `accountability-partner` worker → Edit code → replace with `worker.js` → Save and Deploy.
-2. Settings → Variables → add the three secrets above (Encrypt).
+1. Workers & Pages → `accountability-partner` → Edit code → paste `worker.js` → Save and Deploy.
+2. Settings → Variables → add any missing secrets above (Encrypted).
 
 ## Allowed origins
 
-`worker.js` lists permitted origins for CORS. Add yours to `ALLOWED_ORIGINS` if you serve the dashboard from elsewhere.
+`worker.js` lists permitted CORS origins. Add yours if you serve the dashboard from elsewhere.

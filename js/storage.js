@@ -2,7 +2,6 @@ const KEY = 'ap.settings.v1';
 
 const DEFAULTS = {
   workerUrl: '',
-  anthropicKey: '',
   anthropicModel: 'claude-opus-4-7',
   customerPhonesRaw: '',
 };

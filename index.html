@@ -53,17 +53,13 @@
             <div class="help">Allowlist — only these phones appear in the sidebar. Matched against the Ferra export.</div>
           </div>
           <div class="field">
-            <label for="anthropicKey">Anthropic API Key</label>
-            <input type="password" id="anthropicKey" name="anthropicKey" autocomplete="off" />
-            <div class="help">Used in v1.004 onward for AI message drafting. Stored in this device's localStorage.</div>
-          </div>
-          <div class="field">
             <label for="anthropicModel">Claude Model</label>
             <select id="anthropicModel" name="anthropicModel">
-              <option value="claude-opus-4-7">claude-opus-4-7</option>
-              <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
-              <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+              <option value="claude-opus-4-7">claude-opus-4-7 (best quality)</option>
+              <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
+              <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
             </select>
+            <div class="help">Anthropic API key lives on the Worker as <code>ANTHROPIC_API_KEY</code>.</div>
           </div>
         </form>
       </div>

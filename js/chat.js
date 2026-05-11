@@ -1,8 +1,12 @@
 import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
+import { generateMessage } from './anthropic.js';
+import { SYSTEM_PROMPT, buildDraftPrompt } from './prompt.js';
+import { loadSettings } from './storage.js';
 
 const els = {};
 let activeChatId = null;
 let activeCustomer = null;
+let currentMessages = [];
 let pollTimer = null;
 
 export function initChat() {
@@ -13,6 +17,7 @@ export async function openChatFor(customer) {
   stopPolling();
   activeCustomer = customer;
   activeChatId = phoneToChatId(customer.phone);
+  currentMessages = [];
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
@@ -22,6 +27,7 @@ export function closeChat() {
   stopPolling();
   activeChatId = null;
   activeCustomer = null;
+  currentMessages = [];
 }
 
 function renderShell(c) {
@@ -46,9 +52,10 @@ function renderShell(c) {
         <div class="chat-status">Loading messages…</div>
       </div>
       <form class="chat-composer" id="chat-composer">
+        <button type="button" class="icon-btn draft-btn" id="chat-draft" title="Draft with AI (Cmd/Ctrl + J)">&#x2728;</button>
         <textarea
           id="chat-input"
-          placeholder="Type a message…"
+          placeholder="Type a message, or click ✨ to draft with AI…"
           rows="1"
           autocomplete="off"
         ></textarea>
@@ -58,12 +65,16 @@ function renderShell(c) {
   `;
   document.getElementById('chat-refresh').addEventListener('click', () => refreshMessages({ scroll: true }));
   document.getElementById('chat-composer').addEventListener('submit', onSend);
+  document.getElementById('chat-draft').addEventListener('click', onDraft);
   const input = document.getElementById('chat-input');
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       document.getElementById('chat-composer').requestSubmit();
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+      e.preventDefault();
+      onDraft();
     }
   });
 }
@@ -74,10 +85,9 @@ async function refreshMessages({ scroll = false } = {}) {
   try {
     const data = await listMessages(activeChatId, { limit: 100, offset: 0 });
     const messages = (data.messages || []).slice().sort((a, b) => {
-      const ta = parseTimestamp(a.timestamp);
-      const tb = parseTimestamp(b.timestamp);
-      return ta - tb;
+      return parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp);
     });
+    currentMessages = messages;
     if (messages.length === 0) {
       container.innerHTML = `<div class="chat-status">No messages yet.</div>`;
       return;
@@ -123,6 +133,43 @@ async function onSend(e) {
     showError(err.message);
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function onDraft() {
+  if (!activeCustomer) return;
+  const input = document.getElementById('chat-input');
+  const btn = document.getElementById('chat-draft');
+  const sendBtn = document.getElementById('chat-send');
+  const intent = input.value.trim();
+
+  btn.disabled = true;
+  sendBtn.disabled = true;
+  btn.classList.add('busy');
+  const previousValue = input.value;
+  input.value = '';
+  input.placeholder = 'Drafting…';
+
+  try {
+    const { anthropicModel } = loadSettings();
+    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent });
+    const draft = await generateMessage({
+      system: SYSTEM_PROMPT,
+      userPrompt,
+      model: anthropicModel,
+      maxTokens: 600,
+    });
+    input.value = draft || previousValue;
+    autosize.call(input);
+    input.focus();
+  } catch (err) {
+    input.value = previousValue;
+    showError(err.message);
+  } finally {
+    btn.disabled = false;
+    sendBtn.disabled = false;
+    btn.classList.remove('busy');
+    input.placeholder = 'Type a message, or click ✨ to draft with AI…';
   }
 }
 
