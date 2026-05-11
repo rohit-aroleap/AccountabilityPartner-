@@ -2,6 +2,11 @@ name = "accountability-partner"
 main = "worker.js"
 compatibility_date = "2025-06-01"
 
-[vars]
-# FERRA_API_KEY is set as a SECRET, not a var. Use:
-#   wrangler secret put FERRA_API_KEY
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Secrets (set with `wrangler secret put <NAME>`):
+#   FERRA_API_KEY        — Ferra export key
+#   PERISKOPE_API_KEY    — Periskope bearer token
+#   PERISKOPE_PHONE      — Periskope org phone (digits only)
+#   ANTHROPIC_API_KEY    — Anthropic API key

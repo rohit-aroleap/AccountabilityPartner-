@@ -4,6 +4,7 @@ import {
   set,
   update,
   push,
+  remove,
   onValue,
   off,
   query,
@@ -42,4 +43,15 @@ export function subscribeActivity(phone, n, cb) {
   };
   onValue(q, handler);
   return () => off(q, 'value', handler);
+}
+
+export function subscribePendingDraft(phone, cb) {
+  const r = customerRef(phone, '/pendingDraft');
+  const handler = (snap) => cb(snap.exists() ? snap.val() : null);
+  onValue(r, handler);
+  return () => off(r, 'value', handler);
+}
+
+export async function clearPendingDraft(phone) {
+  await remove(customerRef(phone, '/pendingDraft'));
 }

@@ -1,3 +1,5 @@
+import { runCron } from './cron.js';
+
 const FERRA_EXPORT_URL =
   'https://asia-south1-aroleap-fa76f.cloudfunctions.net/exportFerraDashboard';
 const PERISKOPE_BASE = 'https://api.periskope.app/v1';
@@ -42,10 +44,20 @@ export default {
       if (url.pathname === '/anthropic/messages') {
         return handleAnthropic(request, env, corsHeaders);
       }
+      if (url.pathname === '/cron/run') {
+        const result = await runCron(env);
+        return json({ ok: true, ...result }, corsHeaders);
+      }
       return json({ error: 'Not found', path: url.pathname }, corsHeaders, 404);
     } catch (err) {
       return json({ error: 'Worker exception', message: err.message }, corsHeaders, 500);
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runCron(env).catch(err => {
+      console.error('Cron failed:', err);
+    }));
   },
 };
 

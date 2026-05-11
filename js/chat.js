@@ -2,7 +2,7 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { SYSTEM_COACH, SYSTEM_REPLY, buildDraftPrompt } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft } from './firebase-db.js';
 import { checkOutboundSafety, nextOutboundCount, istDateStr } from './safety.js';
 import { openCustomerSettings } from './customer-settings.js';
 
@@ -11,6 +11,8 @@ let activeChatId = null;
 let activeCustomer = null;
 let currentMessages = [];
 let pollTimer = null;
+let pendingDraftUnsub = null;
+let activePendingDraft = null;
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
@@ -18,19 +20,24 @@ export function initChat() {
 
 export async function openChatFor(customer) {
   stopPolling();
+  if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   activeCustomer = customer;
   activeChatId = phoneToChatId(customer.phone);
   currentMessages = [];
+  activePendingDraft = null;
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
+  pendingDraftUnsub = subscribePendingDraft(customer.phone, onPendingDraftChange);
 }
 
 export function closeChat() {
   stopPolling();
+  if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   activeChatId = null;
   activeCustomer = null;
   currentMessages = [];
+  activePendingDraft = null;
 }
 
 function renderShell(c) {
@@ -55,6 +62,7 @@ function renderShell(c) {
       <div class="chat-messages" id="chat-messages">
         <div class="chat-status">Loading messages…</div>
       </div>
+      <div id="pending-draft-banner" class="pending-draft" hidden></div>
       <form class="chat-composer" id="chat-composer">
         <div class="draft-btns">
           <button type="button" class="draft-btn coach" id="chat-draft-coach" title="Coach: workout accountability (Ctrl/Cmd+J)">&#x1F4AA;</button>
@@ -86,6 +94,53 @@ function renderShell(c) {
       onDraft('coach');
     }
   });
+}
+
+function onPendingDraftChange(draft) {
+  activePendingDraft = draft;
+  const banner = document.getElementById('pending-draft-banner');
+  const input = document.getElementById('chat-input');
+  if (!banner || !input) return;
+
+  if (!draft) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  const when = new Date(draft.ts);
+  const timeStr = when.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  banner.hidden = false;
+  banner.innerHTML = `
+    <span class="pd-label">🤖 AI draft from ${escapeHtml(draft.source || 'cron')} · ${escapeHtml(timeStr)}${draft.reason ? ' · ' + escapeHtml(draft.reason) : ''}</span>
+    <button type="button" class="pd-discard" id="pd-discard">Discard</button>
+  `;
+  document.getElementById('pd-discard').addEventListener('click', discardPendingDraft);
+
+  if (!input.value.trim()) {
+    input.value = draft.message || '';
+    autosize.call(input);
+  }
+}
+
+async function discardPendingDraft() {
+  if (!activeCustomer || !activePendingDraft) return;
+  const draft = activePendingDraft;
+  try {
+    await clearPendingDraft(activeCustomer.phone);
+    await logActivity(activeCustomer.phone, {
+      direction: 'system',
+      source: 'manual',
+      action: 'draft-discarded',
+      message: draft.message,
+    });
+    const input = document.getElementById('chat-input');
+    if (input && input.value.trim() === (draft.message || '').trim()) {
+      input.value = '';
+      autosize.call(input);
+    }
+  } catch (err) {
+    showError(`Discard failed: ${err.message}`);
+  }
 }
 
 async function refreshMessages({ scroll = false } = {}) {
@@ -145,6 +200,8 @@ async function onSend(e) {
     if (!proceed) return;
   }
 
+  const wasDraftApproval = activePendingDraft && (activePendingDraft.message || '').trim() === text;
+
   btn.disabled = true;
   try {
     await sendMessage(activeChatId, text);
@@ -154,8 +211,14 @@ async function onSend(e) {
         outboundCountDate: istDateStr(),
         outboundCountToday: nextOutboundCount(config),
       }),
-      logActivity(phone, { direction: 'outbound', source: 'manual', action: 'sent', message: text }),
+      logActivity(phone, {
+        direction: 'outbound',
+        source: wasDraftApproval ? 'approved' : 'manual',
+        action: wasDraftApproval ? 'approved-draft-sent' : 'sent',
+        message: text,
+      }),
     ]).catch(err => console.warn('Activity log failed:', err));
+    if (activePendingDraft) await clearPendingDraft(phone).catch(() => {});
     input.value = '';
     autosize.call(input);
     setTimeout(() => refreshMessages({ scroll: true }), 800);
