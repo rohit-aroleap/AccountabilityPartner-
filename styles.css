@@ -208,7 +208,7 @@ form label {
   font-weight: 500;
 }
 
-form input, form select {
+form input, form select, form textarea {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -216,11 +216,112 @@ form input, form select {
   border-radius: 6px;
   font-size: 13px;
   font-family: inherit;
+  resize: vertical;
 }
 
-form input:focus, form select:focus {
+form input:focus, form select:focus, form textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.help code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.cust-row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+
+.cust-row:hover { background: var(--panel-2); }
+
+.cust-row.active {
+  background: var(--panel-2);
+  border-left-color: var(--accent);
+}
+
+.cust-row.missing {
+  opacity: 0.55;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.avatar-missing {
+  background: var(--border);
+  color: var(--muted);
+}
+
+.cust-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cust-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cust-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cust-meta {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.cust-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.badge {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.cust-segment {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .help {

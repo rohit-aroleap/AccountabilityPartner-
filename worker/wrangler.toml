@@ -1,0 +1,7 @@
+name = "accountability-partner"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+# FERRA_API_KEY is set as a SECRET, not a var. Use:
+#   wrangler secret put FERRA_API_KEY

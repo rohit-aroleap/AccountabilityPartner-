@@ -17,14 +17,14 @@
         <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
       </header>
       <div class="customer-list">
-        <div class="empty-list">No customers loaded yet.<br />Configure the workout JSON URL in settings.</div>
+        <div class="empty-list">Configure settings to load customers.</div>
       </div>
     </aside>
 
     <main class="chat-pane">
       <div class="empty-chat">
         <h2>Pick a customer to start a conversation</h2>
-        <p>Messages are sent on your behalf via Periskope. AI replies use your Claude API key. Both stay on this device.</p>
+        <p>Messages are sent on your behalf via Periskope. AI replies use your Claude API key.</p>
       </div>
     </main>
   </div>
@@ -43,9 +43,18 @@
       <div class="modal-body">
         <form id="settings-form">
           <div class="field">
+            <label for="workerUrl">Cloudflare Worker URL</label>
+            <input type="url" id="workerUrl" name="workerUrl" placeholder="https://accountability-partner.your-subdomain.workers.dev" autocomplete="off" />
+            <div class="help">Proxies the Ferra workout export. Deploy <code>worker/worker.js</code> and set the <code>FERRA_API_KEY</code> secret.</div>
+          </div>
+          <div class="field">
+            <label for="customerPhonesRaw">Customer phone numbers (one per line)</label>
+            <textarea id="customerPhonesRaw" name="customerPhonesRaw" rows="5" placeholder="+919876543210&#10;+919123456789" autocomplete="off"></textarea>
+            <div class="help">Allowlist — only these phones appear in the sidebar. Matched against the Ferra export.</div>
+          </div>
+          <div class="field">
             <label for="periskopeToken">Periskope API Token</label>
             <input type="password" id="periskopeToken" name="periskopeToken" autocomplete="off" />
-            <div class="help">Used to send/receive WhatsApp messages from your number.</div>
           </div>
           <div class="field">
             <label for="periskopePhone">Periskope Channel Phone (your number)</label>
@@ -54,7 +63,7 @@
           <div class="field">
             <label for="anthropicKey">Anthropic API Key</label>
             <input type="password" id="anthropicKey" name="anthropicKey" autocomplete="off" />
-            <div class="help">Browser-direct call to api.anthropic.com. Stored in this device's localStorage only.</div>
+            <div class="help">Stored in this device's localStorage only.</div>
           </div>
           <div class="field">
             <label for="anthropicModel">Claude Model</label>
@@ -63,11 +72,6 @@
               <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
               <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="workoutJsonUrl">Workout Data JSON URL</label>
-            <input type="url" id="workoutJsonUrl" name="workoutJsonUrl" placeholder="https://..." autocomplete="off" />
-            <div class="help">Public URL serving the Ferra-shaped export. Indexed by phone number on load.</div>
           </div>
         </form>
       </div>
