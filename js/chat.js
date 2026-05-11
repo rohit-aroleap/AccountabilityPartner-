@@ -2,6 +2,9 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { SYSTEM_COACH, SYSTEM_REPLY, buildDraftPrompt } from './prompt.js';
 import { loadSettings } from './storage.js';
+import { readConfig, writeConfig, logActivity } from './firebase-db.js';
+import { checkOutboundSafety, nextOutboundCount, istDateStr } from './safety.js';
+import { openCustomerSettings } from './customer-settings.js';
 
 const els = {};
 let activeChatId = null;
@@ -46,6 +49,7 @@ function renderShell(c) {
           <div class="chat-header-name">${escapeHtml(c.name || c.phone)}</div>
           <div class="chat-header-sub">${sub}</div>
         </div>
+        <button class="icon-btn" id="chat-settings" title="Customer settings">&#9881;</button>
         <button class="icon-btn" id="chat-refresh" title="Refresh">&#x21bb;</button>
       </header>
       <div class="chat-messages" id="chat-messages">
@@ -67,6 +71,7 @@ function renderShell(c) {
     </div>
   `;
   document.getElementById('chat-refresh').addEventListener('click', () => refreshMessages({ scroll: true }));
+  document.getElementById('chat-settings').addEventListener('click', () => openCustomerSettings(c));
   document.getElementById('chat-composer').addEventListener('submit', onSend);
   document.getElementById('chat-draft-coach').addEventListener('click', () => onDraft('coach'));
   document.getElementById('chat-draft-reply').addEventListener('click', () => onDraft('reply'));
@@ -126,14 +131,36 @@ async function onSend(e) {
   const input = document.getElementById('chat-input');
   const btn = document.getElementById('chat-send');
   const text = input.value.trim();
-  if (!text || !activeChatId) return;
+  if (!text || !activeChatId || !activeCustomer) return;
+
+  const phone = activeCustomer.phone;
+  const config = (await readConfig(phone)) || {};
+  const safety = checkOutboundSafety(config);
+
+  if (!safety.ok) {
+    const proceed = confirm(`Safety blocks:\n  • ${safety.blocks.join('\n  • ')}\n\nSend anyway?`);
+    if (!proceed) return;
+  } else if (safety.warnings.length) {
+    const proceed = confirm(`Heads-up:\n  • ${safety.warnings.join('\n  • ')}\n\nSend?`);
+    if (!proceed) return;
+  }
+
   btn.disabled = true;
   try {
     await sendMessage(activeChatId, text);
+    await Promise.all([
+      writeConfig(phone, {
+        lastOutboundAt: Date.now(),
+        outboundCountDate: istDateStr(),
+        outboundCountToday: nextOutboundCount(config),
+      }),
+      logActivity(phone, { direction: 'outbound', source: 'manual', action: 'sent', message: text }),
+    ]).catch(err => console.warn('Activity log failed:', err));
     input.value = '';
     autosize.call(input);
     setTimeout(() => refreshMessages({ scroll: true }), 800);
   } catch (err) {
+    logActivity(phone, { direction: 'outbound', source: 'manual', action: 'send-failed', error: err.message }).catch(() => {});
     showError(err.message);
   } finally {
     btn.disabled = false;
@@ -169,9 +196,21 @@ async function onDraft(mode) {
     input.value = draft || previousValue;
     autosize.call(input);
     input.focus();
+    logActivity(activeCustomer.phone, {
+      direction: 'system',
+      source: 'manual',
+      action: `drafted-${mode}`,
+      message: draft,
+    }).catch(() => {});
   } catch (err) {
     input.value = previousValue;
     showError(err.message);
+    logActivity(activeCustomer.phone, {
+      direction: 'system',
+      source: 'manual',
+      action: `draft-${mode}-failed`,
+      error: err.message,
+    }).catch(() => {});
   } finally {
     coachBtn.disabled = false;
     replyBtn.disabled = false;
