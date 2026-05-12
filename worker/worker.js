@@ -146,7 +146,7 @@ async function handleWorkout(request, env, corsHeaders) {
 
   const res = await fetch(upstream.toString(), {
     headers: { 'x-api-key': env.FERRA_API_KEY },
-    cf: { cacheTtl: 60, cacheEverything: true },
+    cf: { cacheTtl: 300, cacheEverything: true },
   });
   if (!res.ok) {
     const body = await res.text();
@@ -154,7 +154,7 @@ async function handleWorkout(request, env, corsHeaders) {
   }
   return new Response(res.body, {
     status: 200,
-    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=30' },
+    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=120' },
   });
 }
 
@@ -857,7 +857,10 @@ function nextOutboundCount(config, today) {
 async function fetchWorkout(env) {
   const u = new URL(FERRA_EXPORT_URL);
   u.searchParams.set('includeExerciseDb', 'false');
-  const r = await fetch(u.toString(), { headers: { 'x-api-key': env.FERRA_API_KEY } });
+  const r = await fetch(u.toString(), {
+    headers: { 'x-api-key': env.FERRA_API_KEY },
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
   if (!r.ok) throw new Error(`Workout fetch ${r.status}`);
   return r.json();
 }
