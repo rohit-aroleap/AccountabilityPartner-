@@ -75,7 +75,11 @@ export function subscribeWebhookEventsForChat(chatId, n, cb) {
     const map = new Map();
     snap.forEach(child => {
       const v = child.val();
-      if (v?.type === 'webhook' && v.chat_id === chatId && v.message_id) {
+      if (v?.type !== 'webhook' || v.chat_id !== chatId || !v.message_id) return;
+      const existing = map.get(v.message_id);
+      // Prefer the message.created entry — that's the one our handler actually decided on.
+      // Don't let later message.updated/ack events overwrite the real decision.
+      if (!existing || (v.event === 'message.created' && existing.event !== 'message.created')) {
         map.set(v.message_id, { id: child.key, ...v });
       }
     });

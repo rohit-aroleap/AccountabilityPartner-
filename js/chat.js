@@ -201,6 +201,11 @@ function renderAiBadge(messageId) {
     cls = 'ok'; text = 'AI: drafted'; tooltip = 'Draft queued — review in composer';
   } else if (r.acted === 'auto-paused') {
     cls = 'warn'; text = 'AI: paused customer'; tooltip = 'Opt-out keyword detected';
+  } else if (r.ignored === 'wrong-event') {
+    cls = 'skip';
+    const got = r.got || ev.event || '(missing)';
+    text = `AI: skip · wrong-event (${got})`;
+    tooltip = `Periskope delivered event "${got}" — webhook handler only acts on "message.created". This usually means Periskope is also pushing message.updated/ack events to the same URL.`;
   } else if (r.ignored) {
     cls = 'skip'; text = `AI: skip · ${r.ignored}`; tooltip = explainSkip(r.ignored);
   } else {
