@@ -49,8 +49,7 @@ export function istHourMinute(date = new Date()) {
 }
 
 function istParts(date) {
-  const utcMs = date.getTime() + date.getTimezoneOffset() * 60000;
-  const ist = new Date(utcMs + 5.5 * 60 * 60000);
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60000);
   const iso = ist.toISOString();
   return { date: iso.slice(0, 10), hm: iso.slice(11, 16) };
 }
