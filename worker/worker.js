@@ -66,7 +66,7 @@ Output ONLY the WhatsApp message text. No quotes. No preamble. No "Here's a draf
 // ============================================================
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const origin = request.headers.get('origin') || '';
     const corsHeaders = buildCorsHeaders(origin);
@@ -81,7 +81,7 @@ export default {
       if (url.pathname === '/periskope/send') return handlePeriskopeSend(request, env, corsHeaders);
       if (url.pathname === '/periskope/messages') return handlePeriskopeMessages(request, env, corsHeaders);
       if (url.pathname === '/anthropic/messages') return handleAnthropic(request, env, corsHeaders);
-      if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, corsHeaders);
+      if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, ctx, corsHeaders);
       if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
       if (url.pathname === '/cron/run') {
         const result = await runCron(env);
@@ -203,7 +203,7 @@ function periskopeConfig(env) {
 // Webhook — inbound message auto-reply
 // ============================================================
 
-async function handlePeriskopeWebhook(request, env, corsHeaders) {
+async function handlePeriskopeWebhook(request, env, ctx, corsHeaders) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
 
   const t0 = Date.now();
@@ -213,10 +213,19 @@ async function handlePeriskopeWebhook(request, env, corsHeaders) {
   let payload;
   try { payload = JSON.parse(rawBody); }
   catch {
-    await logAutomation({ type: 'webhook', ts: t0, error: 'invalid-json', raw: rawPreview });
+    ctx.waitUntil(logAutomation({ type: 'webhook', ts: t0, error: 'invalid-json', raw: rawPreview }));
     return json({ error: 'Invalid JSON' }, corsHeaders, 400);
   }
 
+  // Periskope's axios client times out after ~5s and cancels the request.
+  // The LLM call alone takes 5-15s, so we MUST ack immediately and process in the background.
+  // ctx.waitUntil keeps the worker running up to ~30s after the response is sent.
+  ctx.waitUntil(processWebhookInBackground(env, payload, t0, rawPreview));
+
+  return json({ ok: true, ack: true }, corsHeaders);
+}
+
+async function processWebhookInBackground(env, payload, t0, rawPreview) {
   let result, errorMsg;
   try {
     result = await processInboundReply(env, payload);
@@ -224,7 +233,6 @@ async function handlePeriskopeWebhook(request, env, corsHeaders) {
     errorMsg = err.message;
     result = { error: err.message };
   }
-
   await logAutomation({
     type: 'webhook',
     ts: t0,
@@ -236,9 +244,9 @@ async function handlePeriskopeWebhook(request, env, corsHeaders) {
     message_type: payload?.data?.message_type,
     raw: rawPreview,
     result,
+    duration_ms: Date.now() - t0,
+    error: errorMsg,
   });
-
-  return json({ ok: !errorMsg, result }, corsHeaders);
 }
 
 async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
