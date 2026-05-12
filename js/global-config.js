@@ -51,6 +51,10 @@ function mergeWithDefaults(cfg) {
     },
     introMessage: typeof cfg?.introMessage === 'string' && cfg.introMessage.length > 0
       ? cfg.introMessage : DEFAULT_GLOBAL.introMessage,
+    introMessageFerra: typeof cfg?.introMessageFerra === 'string' && cfg.introMessageFerra.length > 0
+      ? cfg.introMessageFerra : DEFAULT_GLOBAL.introMessageFerra,
+    introMessageGym: typeof cfg?.introMessageGym === 'string' && cfg.introMessageGym.length > 0
+      ? cfg.introMessageGym : DEFAULT_GLOBAL.introMessageGym,
     safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
   };
 }

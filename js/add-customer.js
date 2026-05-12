@@ -1,10 +1,13 @@
-import { addCustomer } from './storage.js';
+import { addCustomer, normalizePhoneInput } from './storage.js';
 import { writeConfig, logActivity } from './firebase-db.js';
 import { sendMessage, phoneToChatId } from './periskope.js';
 import { loadGlobalConfig, getCachedGlobalConfig } from './global-config.js';
-import { DEFAULT_INTRO_MESSAGE } from './defaults.js';
+import { isPhoneInFerraExport } from './workout.js';
+import { DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM } from './defaults.js';
 
 let modalEl;
+let detectedType = null;
+let detectDebounce = null;
 const listeners = new Set();
 
 export function onCustomerAdded(fn) {
@@ -30,7 +33,7 @@ export function initAddCustomer() {
           <div class="field">
             <label for="ac-phone">Phone number</label>
             <input type="tel" id="ac-phone" name="phone" placeholder="+919876543210" autocomplete="off" required />
-            <div class="help">International format with country code. The leading <code>+</code> is added automatically.</div>
+            <div class="help" id="ac-detect-hint">International format with country code. Type the phone to auto-detect customer type.</div>
           </div>
 
           <div class="ac-section">
@@ -48,12 +51,11 @@ export function initAddCustomer() {
               <input type="checkbox" id="ac-sendIntro" name="sendIntro" checked />
               <div>
                 <div class="ac-toggle-title">Send an intro message right now</div>
-                <div class="ac-toggle-sub">Goes out via Periskope from your number. Edit the text below.</div>
+                <div class="ac-toggle-sub">Goes out via Periskope from your number. Template auto-picked from <strong>Tune AI → Templates</strong> based on detected type.</div>
               </div>
             </label>
             <div class="field" id="ac-intro-wrap">
               <textarea id="ac-introMessage" name="introMessage" rows="6"></textarea>
-              <div class="help">Default template comes from <strong>Tune AI → Templates</strong>. Edit there to change the global default.</div>
             </div>
           </div>
         </form>
@@ -74,6 +76,7 @@ export function initAddCustomer() {
   document.getElementById('ac-cancel').addEventListener('click', closeModal);
   document.getElementById('ac-form').addEventListener('submit', onSave);
   document.getElementById('ac-sendIntro').addEventListener('change', refreshIntroVisible);
+  document.getElementById('ac-phone').addEventListener('input', onPhoneChange);
 }
 
 async function openModal() {
@@ -81,13 +84,13 @@ async function openModal() {
   document.getElementById('ac-startFresh').checked = true;
   document.getElementById('ac-sendIntro').checked = true;
   document.getElementById('ac-status').textContent = '';
+  document.getElementById('ac-detect-hint').textContent = 'International format with country code. Type the phone to auto-detect customer type.';
+  detectedType = null;
 
-  let intro = DEFAULT_INTRO_MESSAGE;
   try {
-    const cfg = getCachedGlobalConfig() || (await loadGlobalConfig());
-    if (cfg?.introMessage) intro = cfg.introMessage;
+    if (!getCachedGlobalConfig()) await loadGlobalConfig();
   } catch {}
-  document.getElementById('ac-introMessage').value = intro;
+  pickIntroTemplate(null);
   refreshIntroVisible();
   modalEl.classList.add('open');
   setTimeout(() => document.getElementById('ac-name').focus(), 50);
@@ -95,11 +98,54 @@ async function openModal() {
 
 function closeModal() {
   modalEl.classList.remove('open');
+  if (detectDebounce) { clearTimeout(detectDebounce); detectDebounce = null; }
 }
 
 function refreshIntroVisible() {
   const checked = document.getElementById('ac-sendIntro').checked;
   document.getElementById('ac-intro-wrap').hidden = !checked;
+}
+
+function onPhoneChange() {
+  if (detectDebounce) clearTimeout(detectDebounce);
+  detectDebounce = setTimeout(detectType, 500);
+}
+
+async function detectType() {
+  const raw = document.getElementById('ac-phone').value;
+  const phone = normalizePhoneInput(raw);
+  const hintEl = document.getElementById('ac-detect-hint');
+  if (!phone || phone.length < 8) {
+    hintEl.textContent = 'International format with country code. Type the phone to auto-detect customer type.';
+    detectedType = null;
+    pickIntroTemplate(null);
+    return;
+  }
+  try {
+    const isFerra = await isPhoneInFerraExport(phone);
+    detectedType = isFerra ? 'ferra' : 'gym';
+    hintEl.textContent = isFerra
+      ? `Detected: Ferra customer (phone is in the workout export) — using Ferra intro.`
+      : `Detected: Gym / other customer (phone is NOT in the Ferra export) — using Gym intro.`;
+    pickIntroTemplate(detectedType);
+  } catch (err) {
+    hintEl.textContent = `Detection failed: ${err.message}. Using Ferra intro as fallback.`;
+    pickIntroTemplate('ferra');
+  }
+}
+
+function pickIntroTemplate(type) {
+  const cfg = getCachedGlobalConfig();
+  const ferraTmpl = cfg?.introMessageFerra || DEFAULT_INTRO_MESSAGE_FERRA;
+  const gymTmpl = cfg?.introMessageGym || DEFAULT_INTRO_MESSAGE_GYM;
+  const intro = type === 'gym' ? gymTmpl : ferraTmpl;
+  const ta = document.getElementById('ac-introMessage');
+  // Only overwrite if user hasn't edited
+  if (!ta.dataset.userEdited) ta.value = intro;
+  if (!ta._listenerAttached) {
+    ta.addEventListener('input', () => { ta.dataset.userEdited = '1'; });
+    ta._listenerAttached = true;
+  }
 }
 
 async function onSave(e) {
@@ -125,6 +171,7 @@ async function onSave(e) {
 
   const configPatch = {};
   if (startFresh) configPatch.conversationStartTs = now;
+  if (detectedType === 'ferra' || detectedType === 'gym') configPatch.customerType = detectedType;
   if (Object.keys(configPatch).length) {
     try {
       await writeConfig(normPhone, configPatch);
@@ -153,6 +200,10 @@ async function onSave(e) {
   } else {
     status.textContent = `Added ${normPhone}.`;
   }
+
+  // Reset edit flag for next use
+  const ta = document.getElementById('ac-introMessage');
+  delete ta.dataset.userEdited;
 
   listeners.forEach(fn => { try { fn(); } catch (err) { console.error(err); } });
   setTimeout(closeModal, 700);

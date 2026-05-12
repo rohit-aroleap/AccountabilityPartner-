@@ -1,5 +1,5 @@
 import { loadGlobalConfig, saveGlobalConfig, getCachedGlobalConfig } from './global-config.js';
-import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE } from './defaults.js';
+import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE, DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM } from './defaults.js';
 import { parseCustomerPhones, loadSettings } from './storage.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
 import { generateMessage } from './anthropic.js';
@@ -22,7 +22,8 @@ export function initTuneAi() {
   document.getElementById('tune-reset-coach').addEventListener('click', () => resetField('coach'));
   document.getElementById('tune-reset-reply').addEventListener('click', () => resetField('reply'));
   document.getElementById('tune-reset-gym').addEventListener('click', () => resetField('gym'));
-  document.getElementById('tune-reset-intro').addEventListener('click', () => resetField('intro'));
+  document.getElementById('tune-reset-intro-ferra').addEventListener('click', () => resetField('intro-ferra'));
+  document.getElementById('tune-reset-intro-gym').addEventListener('click', () => resetField('intro-gym'));
   document.getElementById('tune-sandbox-run').addEventListener('click', runSandbox);
   modalEl.querySelectorAll('.tune-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -58,7 +59,8 @@ function hydrateForm() {
   f.coach.value = working.prompts.coach;
   f.reply.value = working.prompts.reply;
   f.gym.value = working.prompts.gym;
-  f.introMessage.value = working.introMessage || DEFAULT_INTRO_MESSAGE;
+  f.introMessageFerra.value = working.introMessageFerra || DEFAULT_INTRO_MESSAGE_FERRA;
+  f.introMessageGym.value = working.introMessageGym || DEFAULT_INTRO_MESSAGE_GYM;
   for (const k of Object.keys(DEFAULT_SAFETY)) {
     if (f[k]) f[k].value = working.safety[k];
   }
@@ -69,7 +71,8 @@ function resetField(key) {
   if (key === 'coach') f.coach.value = DEFAULT_SYSTEM_COACH;
   if (key === 'reply') f.reply.value = DEFAULT_SYSTEM_REPLY;
   if (key === 'gym') f.gym.value = DEFAULT_SYSTEM_GYM_COACH;
-  if (key === 'intro') f.introMessage.value = DEFAULT_INTRO_MESSAGE;
+  if (key === 'intro-ferra') f.introMessageFerra.value = DEFAULT_INTRO_MESSAGE_FERRA;
+  if (key === 'intro-gym') f.introMessageGym.value = DEFAULT_INTRO_MESSAGE_GYM;
 }
 
 async function onSave(e) {
@@ -83,7 +86,8 @@ async function onSave(e) {
       reply: (data.get('reply') || '').trim() || DEFAULT_SYSTEM_REPLY,
       gym: (data.get('gym') || '').trim() || DEFAULT_SYSTEM_GYM_COACH,
     },
-    introMessage: (data.get('introMessage') || '').trim() || DEFAULT_INTRO_MESSAGE,
+    introMessageFerra: (data.get('introMessageFerra') || '').trim() || DEFAULT_INTRO_MESSAGE_FERRA,
+    introMessageGym: (data.get('introMessageGym') || '').trim() || DEFAULT_INTRO_MESSAGE_GYM,
     safety: {
       quietHoursStart: (data.get('quietHoursStart') || '21:00').trim(),
       quietHoursEnd: (data.get('quietHoursEnd') || '08:00').trim(),
@@ -212,14 +216,22 @@ function buildModalHtml() {
           </div>
 
           <div class="tune-pane" data-pane="templates">
-            <p class="tune-blurb">Pre-written messages used in customer-facing flows. Edit and save — used the next time you add a customer.</p>
+            <p class="tune-blurb">Pre-written messages used in customer-facing flows. Two intros — the Add Customer modal auto-picks based on whether the phone is in the Ferra export.</p>
             <div class="field">
               <div class="field-label-row">
-                <label for="tune-intro">Intro message (when adding a new customer)</label>
-                <button type="button" class="link-btn" id="tune-reset-intro">Reset to default</button>
+                <label for="tune-intro-ferra">Intro for Ferra customers</label>
+                <button type="button" class="link-btn" id="tune-reset-intro-ferra">Reset to default</button>
               </div>
-              <textarea id="tune-intro" name="introMessage" rows="6" spellcheck="false"></textarea>
-              <div class="help">Pre-fills the Add Customer modal. The user can edit per-customer before sending.</div>
+              <textarea id="tune-intro-ferra" name="introMessageFerra" rows="5" spellcheck="false"></textarea>
+              <div class="help">Used when the new customer is detected as a Ferra machine user (phone is in the export).</div>
+            </div>
+            <div class="field">
+              <div class="field-label-row">
+                <label for="tune-intro-gym">Intro for Gym / other customers</label>
+                <button type="button" class="link-btn" id="tune-reset-intro-gym">Reset to default</button>
+              </div>
+              <textarea id="tune-intro-gym" name="introMessageGym" rows="5" spellcheck="false"></textarea>
+              <div class="help">Used when the new customer is NOT in the Ferra export. Skips Ferra-specific references.</div>
             </div>
           </div>
 

@@ -117,9 +117,15 @@ export function subscribeWebhookEventsForChat(chatId, n, cb) {
       const v = child.val();
       if (v?.type !== 'webhook' || v.chat_id !== chatId || !v.message_id) return;
       const existing = map.get(v.message_id);
-      // Prefer the message.created entry — that's the one our handler actually decided on.
-      // Don't let later message.updated/ack events overwrite the real decision.
-      if (!existing || (v.event === 'message.created' && existing.event !== 'message.created')) {
+      // Prefer the entry that actually has a userPrompt (the one that did real work)
+      // and the message.created event over message.updated/ack overwrites.
+      const incomingHasPrompt = !!v.userPrompt;
+      const existingHasPrompt = !!existing?.userPrompt;
+      const incomingIsCreated = v.event === 'message.created';
+      const existingIsCreated = existing?.event === 'message.created';
+      if (!existing
+        || (incomingHasPrompt && !existingHasPrompt)
+        || (incomingIsCreated && !existingIsCreated && !existingHasPrompt)) {
         map.set(v.message_id, { id: child.key, ...v });
       }
     });

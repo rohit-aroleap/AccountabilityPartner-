@@ -59,22 +59,63 @@ function showAiBadgeDetails(messageId) {
     );
     return;
   }
-  const lines = [
-    `Webhook delivered at ${new Date(ev.ts).toLocaleString()}`,
-    ``,
-    `event field: ${ev.event || '(missing)'}`,
-    `chat_id: ${ev.chat_id || ''}`,
-    `message_id: ${ev.message_id || ''}`,
-    `from_me: ${ev.from_me}`,
-    `message_type: ${ev.message_type || '(missing)'}`,
-    ``,
-    `Decision:`,
-    JSON.stringify(ev.result || {}, null, 2),
-    ``,
-    `Raw payload (first 2000 chars):`,
-    ev.raw || '(not captured — only logged from worker v1.015+)',
-  ];
-  alert(lines.join('\n'));
+  showInspectorModal(ev);
+}
+
+function showInspectorModal(ev) {
+  let modal = document.getElementById('ai-inspect-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'ai-inspect-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-card inspect-card">
+        <div class="modal-header">
+          <h2>AI decision inspector</h2>
+          <button class="icon-btn" id="inspect-close">&times;</button>
+        </div>
+        <div class="modal-body inspect-body" id="inspect-body"></div>
+        <div class="modal-footer">
+          <button type="button" class="btn" id="inspect-ok">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+    document.getElementById('inspect-close').addEventListener('click', () => modal.classList.remove('open'));
+    document.getElementById('inspect-ok').addEventListener('click', () => modal.classList.remove('open'));
+  }
+  const body = document.getElementById('inspect-body');
+  const summary = [
+    `<div class="ins-row"><span class="ins-k">Delivered:</span> ${escapeHtml(new Date(ev.ts).toLocaleString())}</div>`,
+    `<div class="ins-row"><span class="ins-k">event:</span> ${escapeHtml(ev.event || '(missing)')}</div>`,
+    `<div class="ins-row"><span class="ins-k">chat_id:</span> ${escapeHtml(ev.chat_id || '')}</div>`,
+    `<div class="ins-row"><span class="ins-k">message_id:</span> <code>${escapeHtml(ev.message_id || '')}</code></div>`,
+    `<div class="ins-row"><span class="ins-k">from_me:</span> ${escapeHtml(String(ev.from_me))}</div>`,
+    `<div class="ins-row"><span class="ins-k">message_type:</span> ${escapeHtml(ev.message_type || '(missing)')}</div>`,
+    `<div class="ins-row"><span class="ins-k">customerType:</span> ${escapeHtml(ev.customerType || '(unknown)')}</div>`,
+    `<div class="ins-row"><span class="ins-k">duration:</span> ${escapeHtml(String(ev.duration_ms || ''))} ms</div>`,
+  ].join('');
+  const decision = `<pre class="ins-pre">${escapeHtml(JSON.stringify(ev.result || {}, null, 2))}</pre>`;
+  const userPromptBlock = ev.userPrompt
+    ? `<details open><summary class="ins-summary">User prompt sent to Anthropic (${ev.userPrompt.length} chars)</summary><pre class="ins-pre">${escapeHtml(ev.userPrompt)}</pre></details>`
+    : `<div class="ins-row ins-muted">User prompt not captured for this event (early-exit before prompt was built, or pre-v1.022 worker).</div>`;
+  const systemPromptHint = ev.systemPromptType
+    ? `<div class="ins-row"><span class="ins-k">system prompt:</span> ${escapeHtml(ev.systemPromptType)}</div>`
+    : '';
+  const rawBlock = ev.raw
+    ? `<details><summary class="ins-summary">Raw Periskope payload (${ev.raw.length} chars)</summary><pre class="ins-pre">${escapeHtml(ev.raw)}</pre></details>`
+    : '';
+  body.innerHTML = `
+    ${summary}
+    ${systemPromptHint}
+    <h3 class="ins-h">Decision</h3>
+    ${decision}
+    <h3 class="ins-h">Context the AI saw</h3>
+    ${userPromptBlock}
+    ${rawBlock}
+  `;
+  modal.classList.add('open');
 }
 
 export async function openChatFor(customer) {
