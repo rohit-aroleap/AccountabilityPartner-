@@ -2,19 +2,23 @@ import { subscribeAutomationFeed } from './firebase-db.js';
 
 const els = {};
 let nextCronTimer = null;
-let collapsed = false;
+let collapsed = true;
+const COLLAPSE_KEY = 'ap.automationCollapsed';
 
 export function initAutomationFeed() {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
 
+  const stored = localStorage.getItem(COLLAPSE_KEY);
+  collapsed = stored === null ? true : stored === '1';
+
   const panel = document.createElement('div');
-  panel.className = 'auto-panel';
+  panel.className = 'auto-panel' + (collapsed ? ' collapsed' : '');
   panel.innerHTML = `
     <div class="auto-header">
       <span class="auto-title">Automation</span>
       <span class="auto-next" id="auto-next">Next cron: —</span>
-      <button class="auto-toggle" id="auto-toggle" title="Collapse">−</button>
+      <button class="auto-toggle" id="auto-toggle" title="Toggle">${collapsed ? '+' : '−'}</button>
     </div>
     <div class="auto-feed" id="auto-feed">
       <div class="auto-empty">Waiting for events…</div>
@@ -31,6 +35,7 @@ export function initAutomationFeed() {
     collapsed = !collapsed;
     panel.classList.toggle('collapsed', collapsed);
     els.toggle.textContent = collapsed ? '+' : '−';
+    localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
   });
 
   updateNextCron();
