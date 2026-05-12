@@ -39,6 +39,7 @@ let activeHold = null;
 let activeCustomerConfig = null;
 let activeReminders = [];
 let webhookEventsByMessageId = new Map();
+let replayedMessageIds = new Set();
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
@@ -144,6 +145,7 @@ export async function openChatFor(customer) {
   activeCustomerConfig = null;
   activeReminders = [];
   webhookEventsByMessageId = new Map();
+  replayedMessageIds = new Set();
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
@@ -172,6 +174,7 @@ export function closeChat() {
   activeCustomerConfig = null;
   activeReminders = [];
   webhookEventsByMessageId = new Map();
+  replayedMessageIds = new Set();
 }
 
 function onConfigChange(config) {
@@ -595,6 +598,8 @@ async function refreshMessages({ scroll = false } = {}) {
     }
     container.innerHTML = html.join('');
     if (scroll) container.scrollTop = container.scrollHeight;
+    // After messages are rendered, scan for orphans that Periskope may have failed to deliver
+    maybeReplayOrphanInbounds().catch(err => console.error('replay scan failed:', err));
   } catch (err) {
     container.innerHTML = `<div class="chat-status error">${escapeHtml(err.message)}</div>`;
   }
@@ -682,7 +687,12 @@ function renderBubble(m) {
 function renderAiBadge(messageId) {
   if (!messageId) return '';
   const ev = webhookEventsByMessageId.get(messageId);
-  if (!ev) return `<div class="ai-badge pending" title="No AI decision recorded yet">AI: …</div>`;
+  if (!ev) {
+    if (replayedMessageIds.has(messageId)) {
+      return `<div class="ai-badge pending" title="Replay sent — waiting for worker result (~5-15s)">AI: replaying…</div>`;
+    }
+    return `<div class="ai-badge pending" title="No AI decision recorded yet — auto-replay fires after 60s if Periskope didn't deliver">AI: …</div>`;
+  }
 
   const r = ev.result || {};
   let cls = 'idle', text = 'AI: —', tooltip = '';
@@ -736,6 +746,48 @@ function onWebhookEventsChange(map) {
     if (oldBadge) oldBadge.outerHTML = newHtml;
     else el.insertAdjacentHTML('beforeend', newHtml);
   });
+  // Catch webhook delivery gaps — Periskope sometimes drops events silently
+  maybeReplayOrphanInbounds().catch(err => console.error('replay scan failed:', err));
+}
+
+async function maybeReplayOrphanInbounds() {
+  if (!activeCustomer || !activeChatId) return;
+  const startTs = activeCustomerConfig?.conversationStartTs || 0;
+  const now = Date.now();
+  const orphans = [];
+  for (const m of currentMessages) {
+    if (m.from_me === true) continue;
+    if (!m.message_id) continue;
+    const ts = parseTimestamp(m.timestamp);
+    if (!ts) continue;
+    if (startTs && ts < startTs) continue;
+    if (now - ts < 60_000) continue; // give Periskope 60s before replaying
+    if (webhookEventsByMessageId.has(m.message_id)) continue;
+    if (replayedMessageIds.has(m.message_id)) continue;
+    orphans.push(m);
+  }
+  if (!orphans.length) return;
+  const { workerUrl } = loadSettings();
+  if (!workerUrl) return;
+  const base = workerUrl.replace(/\/+$/, '');
+  for (const m of orphans) {
+    replayedMessageIds.add(m.message_id);
+    try {
+      await fetch(`${base}/periskope/replay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: activeChatId,
+          message_id: m.message_id,
+          body: m.body || '',
+          timestamp: parseTimestamp(m.timestamp),
+          message_type: m.message_type || 'chat',
+        }),
+      });
+    } catch (err) {
+      console.error('Replay POST failed for', m.message_id, err);
+    }
+  }
 }
 
 function mediaLabel(m) {

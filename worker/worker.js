@@ -119,6 +119,7 @@ export default {
       if (url.pathname === '/anthropic/messages') return handleAnthropic(request, env, corsHeaders);
       if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, ctx, corsHeaders);
       if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
+      if (url.pathname === '/periskope/replay') return handlePeriskopeReplay(request, env, ctx, corsHeaders);
       if (url.pathname === '/cron/run') {
         const result = await runCron(env);
         return json({ ok: true, ...result }, corsHeaders);
@@ -294,6 +295,32 @@ async function processWebhookInBackground(env, payload, t0, rawPreview) {
     duration_ms: Date.now() - t0,
     error: errorMsg,
   });
+}
+
+async function handlePeriskopeReplay(request, env, ctx, corsHeaders) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  const t0 = Date.now();
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid JSON' }, corsHeaders, 400); }
+  if (!body.chat_id || !body.message_id) {
+    return json({ error: 'chat_id and message_id required' }, corsHeaders, 400);
+  }
+  const synthPayload = {
+    event: 'message.created',
+    data: {
+      chat_id: body.chat_id,
+      message_id: body.message_id,
+      body: body.body || '',
+      from_me: false,
+      timestamp: body.timestamp || Date.now(),
+      message_type: body.message_type || 'chat',
+    },
+    _replay: true,
+  };
+  const rawPreview = JSON.stringify({ replay: true, ...body }).slice(0, 2000);
+  ctx.waitUntil(processWebhookInBackground(env, synthPayload, t0, rawPreview));
+  return json({ ok: true, replayed: true }, corsHeaders);
 }
 
 async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
