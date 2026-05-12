@@ -95,6 +95,54 @@ html, body {
   padding: 8px 0;
 }
 
+.workout-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.wb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.wb-dot.ok { background: var(--accent); }
+.wb-dot.warn { background: #d4a843; }
+.wb-dot.stale { background: var(--danger); }
+.wb-dot.dim { background: var(--border); }
+
+.wb-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-refresh {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.wb-refresh:hover { color: var(--text); }
+.wb-refresh:disabled { opacity: 0.4; cursor: not-allowed; }
+.wb-refresh.busy { animation: spin 1s linear infinite; }
+
 .empty-list {
   padding: 24px 16px;
   color: var(--muted);

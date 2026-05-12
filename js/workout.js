@@ -51,6 +51,18 @@ function indexByPhone(raw) {
     byUid,
     userMonthlySummaries: raw.userMonthlySummaries || {},
     userHabitHistory: raw.userHabitHistory || {},
+    fetchedAt: Date.now(),
+  };
+}
+
+export function getWorkoutMeta() {
+  if (!cache) return null;
+  const meta = cache.raw?._meta || {};
+  const exportedAtMs = meta.exportedAt ? Date.parse(meta.exportedAt) : null;
+  return {
+    exportedAt: !Number.isNaN(exportedAtMs) ? exportedAtMs : null,
+    fetchedAt: cache.fetchedAt || null,
+    userCount: meta.counts?.users || (cache.users?.length || 0),
   };
 }
 

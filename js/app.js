@@ -8,6 +8,7 @@ import { initAutomationFeed } from './automation-feed.js';
 import { initTuneAi } from './tune-ai.js';
 import { initAddCustomer, onCustomerAdded } from './add-customer.js';
 import { subscribeGlobalConfig } from './global-config.js';
+import { initWorkoutBanner } from './workout-banner.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   initSettings();
@@ -15,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTuneAi();
   initAddCustomer();
   initChat();
+  initWorkoutBanner();
   initCustomers();
   initAutomationFeed();
   onSettingsSaved(() => refresh());
