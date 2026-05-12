@@ -428,18 +428,37 @@ function computeNextUp(config, reminders, customer) {
 
   const modeLabel = config.autoCoachMode === 'auto-send' ? 'auto-sends' : 'queues a draft';
 
-  // Workout-today status for Ferra customers
+  // Workout-today status for Ferra customers — read actual reminder status, not just the lastPostWorkoutDate flag
   let workoutStatus = '';
   if (customer?.found && customer.daysSinceLastSession === 0) {
     const istNow = new Date(Date.now() + 5.5 * 60 * 60000);
-    const today = istNow.toISOString().slice(0, 10);
-    const hasPendingPostWorkout = candidates.some(c => c.source === 'post-workout');
-    if (hasPendingPostWorkout) {
-      // The pending reminder will be the "next" entry — no extra status needed
-    } else if (config.lastPostWorkoutDate === today) {
-      workoutStatus = `<span class="nu-status nu-status-ok">🏋️ Today's workout acknowledged</span>`;
+    const todayIst = istNow.toISOString().slice(0, 10);
+
+    // Find today's post-workout reminder (any status)
+    let todaysPw = null;
+    for (const r of (reminders || [])) {
+      if (r.source !== 'post-workout' || !r.ts) continue;
+      const dStr = new Date(r.ts + 5.5 * 60 * 60000).toISOString().slice(0, 10);
+      if (dStr === todayIst) { todaysPw = r; break; }
+    }
+
+    if (todaysPw) {
+      if (todaysPw.status === 'pending') {
+        // Will appear as the "next" entry via candidates — no extra pill
+      } else if (todaysPw.status === 'sent') {
+        workoutStatus = `<span class="nu-status nu-status-ok">🏋️ Workout ack sent</span>`;
+      } else if (todaysPw.status === 'held') {
+        workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Workout ack held — review pending draft</span>`;
+      } else if (todaysPw.status === 'cancelled') {
+        workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Workout ack cancelled</span>`;
+      } else {
+        workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Workout ack: ${escapeHtml(todaysPw.status)}</span>`;
+      }
+    } else if (config.lastPostWorkoutDate === todayIst) {
+      // Edge case: flag set but no reminder in last 20 (older entries pushed out, or the reminder failed to write)
+      workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Ack scheduled but not in recent list — check activity</span>`;
     } else {
-      workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Worked out today — ack window passed</span>`;
+      workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Worked out today — no ack scheduled</span>`;
     }
   }
 
