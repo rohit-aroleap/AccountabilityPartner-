@@ -30,11 +30,28 @@ export const SYSTEM_COACH = DEFAULT_SYSTEM_COACH;
 export const SYSTEM_REPLY = DEFAULT_SYSTEM_REPLY;
 
 export async function buildDraftPrompt(customer, recentMessages, { intent, mode = 'coach', config = {}, workoutLog = [] } = {}) {
+  const filtered = filterByConversationStart(recentMessages, config?.conversationStartTs);
   const type = resolveCustomerType(customer, config);
   if (type === 'gym' && mode === 'coach') {
-    return buildGymPrompt(customer, recentMessages, { intent, config, workoutLog });
+    return buildGymPrompt(customer, filtered, { intent, config, workoutLog });
   }
-  return buildFerraPrompt(customer, recentMessages, { intent, mode });
+  return buildFerraPrompt(customer, filtered, { intent, mode });
+}
+
+function filterByConversationStart(messages, startTs) {
+  if (!startTs) return messages;
+  return (messages || []).filter(m => {
+    const ts = m.timestamp;
+    if (!ts) return false;
+    let ms;
+    if (typeof ts === 'number') ms = ts < 1e12 ? ts * 1000 : ts;
+    else {
+      const n = Number(ts);
+      if (!Number.isNaN(n) && n > 0) ms = n < 1e12 ? n * 1000 : n;
+      else ms = Date.parse(ts);
+    }
+    return ms >= startTs;
+  });
 }
 
 async function buildFerraPrompt(customer, recentMessages, { intent, mode }) {

@@ -56,6 +56,10 @@ Style:
 
 Output ONLY the WhatsApp message text. No quotes. No preamble. No "Here's a draft:" wrapper.`;
 
+export const DEFAULT_INTRO_MESSAGE = `Hi! I'm Rohit from Ferra. I'll be your habit coach from here on — I'll check in with you in the mornings, remind you to train, and you can ping me anytime with questions about your workouts, form, or motivation.
+
+Looking forward to building this habit together!`;
+
 export const DEFAULT_SAFETY = {
   quietHoursStart: '21:00',
   quietHoursEnd: '08:00',
@@ -73,5 +77,6 @@ export const DEFAULT_GLOBAL = {
     reply: DEFAULT_SYSTEM_REPLY,
     gym: DEFAULT_SYSTEM_GYM_COACH,
   },
+  introMessage: DEFAULT_INTRO_MESSAGE,
   safety: DEFAULT_SAFETY,
 };

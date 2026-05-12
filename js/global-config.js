@@ -49,6 +49,8 @@ function mergeWithDefaults(cfg) {
       reply: cfg?.prompts?.reply || DEFAULT_GLOBAL.prompts.reply,
       gym: cfg?.prompts?.gym || DEFAULT_GLOBAL.prompts.gym,
     },
+    introMessage: typeof cfg?.introMessage === 'string' && cfg.introMessage.length > 0
+      ? cfg.introMessage : DEFAULT_GLOBAL.introMessage,
     safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
   };
 }

@@ -402,6 +402,65 @@ form input:focus, form select:focus, form textarea:focus {
   margin: 12px 18px;
 }
 
+.chat-divider {
+  display: flex;
+  align-items: center;
+  margin: 14px 4px;
+  font-size: 11px;
+}
+
+.chat-divider::before, .chat-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
+
+.chat-divider span {
+  padding: 3px 12px;
+  margin: 0 10px;
+  background: rgba(0, 168, 132, 0.12);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ac-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ac-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.ac-toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.ac-toggle-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.ac-toggle-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .bubble {
   max-width: 72%;
   padding: 7px 11px 6px;

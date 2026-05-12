@@ -9,6 +9,7 @@ const DEFAULT_CONFIG = {
   notes: '',
   customerType: '',
   weeklyGoal: 3,
+  conversationStartTs: 0,
 };
 
 let modalEl;
@@ -71,6 +72,11 @@ export function initCustomerSettings() {
           <div class="field">
             <label for="cs-notes">Notes (private to you)</label>
             <textarea id="cs-notes" name="notes" rows="2" placeholder="e.g., shoulder injury, prefers evenings"></textarea>
+          </div>
+          <div class="field">
+            <label for="cs-conversationStart">Conversation start date (AI ignores messages before this)</label>
+            <input type="datetime-local" id="cs-conversationStart" name="conversationStart" />
+            <div class="help">Leave blank to include the entire WhatsApp history in AI context. Set this to "reset" the AI's view after off-topic chats. Dashboard shows everything regardless.</div>
           </div>
         </form>
 
@@ -139,6 +145,13 @@ function hydrateForm() {
   f.sendTimeIST.value = currentConfig.sendTimeIST || '08:00';
   f.paused.checked = !!currentConfig.paused;
   f.notes.value = currentConfig.notes || '';
+  if (currentConfig.conversationStartTs) {
+    const d = new Date(currentConfig.conversationStartTs);
+    const pad = n => String(n).padStart(2, '0');
+    f.conversationStart.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } else {
+    f.conversationStart.value = '';
+  }
 }
 
 function onTypeChange() {
@@ -162,6 +175,9 @@ function refreshTypeUI() {
 async function onSave(e) {
   e.preventDefault();
   const f = e.target;
+  const convStart = f.conversationStart.value
+    ? new Date(f.conversationStart.value).getTime()
+    : 0;
   const patch = {
     customerType: f.customerType.value || '',
     weeklyGoal: parseInt(f.weeklyGoal.value, 10) || 3,
@@ -169,6 +185,7 @@ async function onSave(e) {
     sendTimeIST: f.sendTimeIST.value || '08:00',
     paused: f.paused.checked,
     notes: f.notes.value,
+    conversationStartTs: convStart || 0,
   };
   try {
     await writeConfig(currentPhone, patch);

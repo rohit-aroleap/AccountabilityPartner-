@@ -211,7 +211,10 @@ async function refreshMessages({ scroll = false } = {}) {
   if (!activeChatId) return;
   const container = document.getElementById('chat-messages');
   try {
-    const data = await listMessages(activeChatId, { limit: 100, offset: 0 });
+    const [data, config] = await Promise.all([
+      listMessages(activeChatId, { limit: 100, offset: 0 }),
+      readConfig(activeCustomer.phone).catch(() => null),
+    ]);
     const messages = (data.messages || []).slice().sort((a, b) => {
       return parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp);
     });
@@ -220,11 +223,30 @@ async function refreshMessages({ scroll = false } = {}) {
       container.innerHTML = `<div class="chat-status">No messages yet.</div>`;
       return;
     }
-    container.innerHTML = messages.map(renderBubble).join('');
+    const startTs = config?.conversationStartTs || 0;
+    const html = [];
+    let dividerInserted = false;
+    for (const m of messages) {
+      if (startTs && !dividerInserted && parseTimestamp(m.timestamp) >= startTs) {
+        html.push(renderDivider(startTs));
+        dividerInserted = true;
+      }
+      html.push(renderBubble(m));
+    }
+    if (startTs && !dividerInserted) {
+      html.push(renderDivider(startTs));
+    }
+    container.innerHTML = html.join('');
     if (scroll) container.scrollTop = container.scrollHeight;
   } catch (err) {
     container.innerHTML = `<div class="chat-status error">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function renderDivider(ts) {
+  const d = new Date(ts);
+  const label = `AI context starts here · ${d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+  return `<div class="chat-divider"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function renderBubble(m) {

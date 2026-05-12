@@ -398,7 +398,8 @@ async function processInboundReply(env, payload) {
   const user = findUserInWorkout(workout, phoneKey);
   const customerType = resolveCustomerType(config, user);
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
-  const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  messages = filterByConversationStart(messages, config?.conversationStartTs);
 
   let userPrompt, systemPrompt;
   if (customerType === 'gym') {
@@ -533,7 +534,8 @@ async function processCustomer(env, phoneKey, config, workout, ist, today, globa
   const customerType = resolveCustomerType(config, user);
 
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
-  const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  messages = filterByConversationStart(messages, config?.conversationStartTs);
 
   let userPrompt, systemPrompt;
   if (customerType === 'gym') {
@@ -754,6 +756,11 @@ function buildCronCheckinPrompt({ phone, user, raw, messages, istNow }) {
   lines.push('');
   lines.push('This is the morning accountability check-in. Lead with workouts. Be specific to their data. If they replied last, acknowledge that briefly, then pivot to training.');
   return lines.join('\n');
+}
+
+function filterByConversationStart(messages, startTs) {
+  if (!startTs) return messages;
+  return (messages || []).filter(m => tsMs(m.timestamp) >= startTs);
 }
 
 function resolveCustomerType(config, ferraUser) {
