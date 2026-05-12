@@ -1,6 +1,7 @@
 import { loadGlobalConfig, saveGlobalConfig, getCachedGlobalConfig } from './global-config.js';
 import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE, DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM } from './defaults.js';
 import { parseCustomerPhones, loadSettings } from './storage.js';
+import { subscribeAiUsage } from './firebase-db.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
 import { generateMessage } from './anthropic.js';
 import { listMessages, phoneToChatId } from './periskope.js';
@@ -30,6 +31,8 @@ export function initTuneAi() {
   });
 }
 
+let usageUnsub = null;
+
 export async function openTuneAi() {
   try {
     working = await loadGlobalConfig();
@@ -39,8 +42,50 @@ export async function openTuneAi() {
   }
   hydrateForm();
   hydrateSandboxCustomers();
+  if (usageUnsub) usageUnsub();
+  usageUnsub = subscribeAiUsage(renderUsage);
   switchTab('prompts');
   modalEl.classList.add('open');
+}
+
+function renderUsage(byDate) {
+  const el = document.getElementById('tune-usage');
+  if (!el) return;
+  const dates = Object.keys(byDate || {}).sort().reverse().slice(0, 14);
+  if (dates.length === 0) {
+    el.innerHTML = `<div class="cs-empty">No usage tracked yet. After the next AI call from the worker, stats will appear here.</div>`;
+    return;
+  }
+  const rows = dates.map(d => {
+    const u = byDate[d] || {};
+    const inT = u.inputTokens || 0;
+    const outT = u.outputTokens || 0;
+    const cost = (inT * 15 / 1e6 + outT * 75 / 1e6);
+    return `<tr>
+      <td>${escapeHtml(d)}</td>
+      <td class="num">${(u.calls || 0).toLocaleString()}</td>
+      <td class="num">${inT.toLocaleString()}</td>
+      <td class="num">${outT.toLocaleString()}</td>
+      <td class="num">$${cost.toFixed(3)}</td>
+      <td class="num ${(u.errors||0)>0?'err':''}">${u.errors || 0}</td>
+    </tr>`;
+  }).join('');
+  const totalIn = dates.reduce((s,d)=>s+(byDate[d]?.inputTokens||0),0);
+  const totalOut = dates.reduce((s,d)=>s+(byDate[d]?.outputTokens||0),0);
+  const totalCalls = dates.reduce((s,d)=>s+(byDate[d]?.calls||0),0);
+  const totalErrors = dates.reduce((s,d)=>s+(byDate[d]?.errors||0),0);
+  const totalCost = (totalIn * 15 / 1e6 + totalOut * 75 / 1e6);
+  el.innerHTML = `
+    <table class="usage-table">
+      <thead>
+        <tr><th>Date (IST)</th><th class="num">Calls</th><th class="num">Input tokens</th><th class="num">Output tokens</th><th class="num">Est. cost</th><th class="num">Errors</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr><td><strong>Total (last ${dates.length}d)</strong></td><td class="num"><strong>${totalCalls.toLocaleString()}</strong></td><td class="num"><strong>${totalIn.toLocaleString()}</strong></td><td class="num"><strong>${totalOut.toLocaleString()}</strong></td><td class="num"><strong>$${totalCost.toFixed(3)}</strong></td><td class="num ${totalErrors>0?'err':''}"><strong>${totalErrors}</strong></td></tr>
+      </tfoot>
+    </table>
+  `;
 }
 
 function closeModal() {
@@ -183,6 +228,7 @@ function buildModalHtml() {
         <button type="button" class="tune-tab-btn" data-tab="safety">Safety</button>
         <button type="button" class="tune-tab-btn" data-tab="killswitch">Kill Switch</button>
         <button type="button" class="tune-tab-btn" data-tab="sandbox">Sandbox</button>
+        <button type="button" class="tune-tab-btn" data-tab="usage">Usage</button>
         <button type="button" class="tune-tab-btn" data-tab="best-practices">Best Practices</button>
       </div>
       <div class="modal-body tune-body">
@@ -307,6 +353,11 @@ function buildModalHtml() {
             </div>
             <button type="button" class="btn" id="tune-sandbox-run">Generate draft</button>
             <pre id="tune-sandbox-output" class="tune-sandbox-out">Pick a customer and click Generate.</pre>
+          </div>
+
+          <div class="tune-pane" data-pane="usage">
+            <p class="tune-blurb">Anthropic API usage tracked per IST date. Rough cost is computed assuming Opus 4 pricing (input $15/M, output $75/M). Switch model in Settings — actual model pricing may differ.</p>
+            <div id="tune-usage" class="tune-usage">Loading…</div>
           </div>
 
           <div class="tune-pane" data-pane="best-practices">

@@ -2,7 +2,7 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder, subscribeHoldQueueForChat, markHoldHeld, logAiRating } from './firebase-db.js';
 import { ref, get, query, limitToLast } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, ROOT_PATH } from './firebase-init.js';
 
@@ -28,7 +28,10 @@ let currentMessages = [];
 let pollTimer = null;
 let pendingDraftUnsub = null;
 let webhookEventsUnsub = null;
+let holdQueueUnsub = null;
+let holdCountdownTimer = null;
 let activePendingDraft = null;
+let activeHold = null;
 let webhookEventsByMessageId = new Map();
 
 export function initChat() {
@@ -122,26 +125,33 @@ export async function openChatFor(customer) {
   stopPolling();
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
+  if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
+  if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
   activeCustomer = customer;
   activeChatId = phoneToChatId(customer.phone);
   currentMessages = [];
   activePendingDraft = null;
+  activeHold = null;
   webhookEventsByMessageId = new Map();
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
   pendingDraftUnsub = subscribePendingDraft(customer.phone, onPendingDraftChange);
   webhookEventsUnsub = subscribeWebhookEventsForChat(activeChatId, 50, onWebhookEventsChange);
+  holdQueueUnsub = subscribeHoldQueueForChat(customer.phone, onHoldQueueChange);
 }
 
 export function closeChat() {
   stopPolling();
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
+  if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
+  if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
   activeChatId = null;
   activeCustomer = null;
   currentMessages = [];
   activePendingDraft = null;
+  activeHold = null;
   webhookEventsByMessageId = new Map();
 }
 
@@ -167,6 +177,7 @@ function renderShell(c) {
       <div class="chat-messages" id="chat-messages">
         <div class="chat-status">Loading messages…</div>
       </div>
+      <div id="hold-banner" class="hold-banner" hidden></div>
       <div id="pending-draft-banner" class="pending-draft" hidden></div>
       <form class="chat-composer" id="chat-composer">
         <div class="draft-btns">
@@ -245,13 +256,101 @@ function onPendingDraftChange(draft) {
   banner.hidden = false;
   banner.innerHTML = `
     <span class="pd-label">🤖 AI draft from ${escapeHtml(draft.source || 'cron')} · ${escapeHtml(timeStr)}${draft.reason ? ' · ' + escapeHtml(draft.reason) : ''}</span>
+    <button type="button" class="pd-rate" id="pd-rate-up" title="Good draft — log positive rating">👍</button>
+    <button type="button" class="pd-rate" id="pd-rate-down" title="Bad draft — log negative rating with reason">👎</button>
     <button type="button" class="pd-discard" id="pd-discard">Discard</button>
   `;
   document.getElementById('pd-discard').addEventListener('click', discardPendingDraft);
+  document.getElementById('pd-rate-up').addEventListener('click', () => rateDraft('up'));
+  document.getElementById('pd-rate-down').addEventListener('click', () => rateDraft('down'));
 
   if (!input.value.trim()) {
     input.value = draft.message || '';
     autosize.call(input);
+  }
+}
+
+async function rateDraft(rating) {
+  if (!activeCustomer || !activePendingDraft) return;
+  let reason = '';
+  if (rating === 'down') {
+    reason = prompt('What was wrong with this draft? (optional — helps tune the prompt)') || '';
+    if (reason === null) return; // cancelled
+  }
+  try {
+    await logAiRating(activeCustomer.phone, {
+      rating,
+      reason: reason.slice(0, 500),
+      draft: (activePendingDraft.message || '').slice(0, 500),
+      source: activePendingDraft.source || '',
+      draftReason: activePendingDraft.reason || '',
+    });
+    await logActivity(activeCustomer.phone, {
+      direction: 'system', source: 'manual',
+      action: `ai-rated-${rating}`,
+      message: reason || (activePendingDraft.message || '').slice(0, 100),
+    });
+    const btn = document.getElementById(rating === 'up' ? 'pd-rate-up' : 'pd-rate-down');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = rating === 'up' ? '✓' : '✓';
+      setTimeout(() => { if (btn) btn.disabled = false; }, 1500);
+    }
+  } catch (err) {
+    alert(`Rating failed: ${err.message}`);
+  }
+}
+
+function onHoldQueueChange(entries) {
+  if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
+  const pending = (entries || []).find(e =>
+    e.status === 'pending' && !e.held && (e.sendAt || 0) > Date.now()
+  );
+  activeHold = pending || null;
+  renderHoldBanner();
+  if (pending) {
+    holdCountdownTimer = setInterval(() => {
+      if (!activeHold || activeHold.sendAt <= Date.now()) {
+        clearInterval(holdCountdownTimer);
+        holdCountdownTimer = null;
+        const banner = document.getElementById('hold-banner');
+        if (banner) banner.hidden = true;
+        return;
+      }
+      renderHoldBanner();
+    }, 250);
+  }
+}
+
+function renderHoldBanner() {
+  const banner = document.getElementById('hold-banner');
+  if (!banner) return;
+  if (!activeHold) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  const remainingMs = Math.max(0, activeHold.sendAt - Date.now());
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  banner.hidden = false;
+  banner.innerHTML = `
+    <span class="hold-label">⏸ Auto-sending in ${remainingSec}s · "${escapeHtml((activeHold.message || '').slice(0, 80))}${(activeHold.message || '').length > 80 ? '…' : ''}"</span>
+    <button type="button" class="hold-btn" id="hold-action">Hold &amp; review</button>
+  `;
+  const btn = document.getElementById('hold-action');
+  btn.addEventListener('click', () => holdAutoSend());
+}
+
+async function holdAutoSend() {
+  if (!activeCustomer || !activeHold) return;
+  const id = activeHold.id;
+  try {
+    await markHoldHeld(activeCustomer.phone, id);
+    // The worker will see held:true after its timer fires and convert to pendingDraft
+    activeHold = null;
+    renderHoldBanner();
+  } catch (err) {
+    alert(`Hold failed: ${err.message}`);
   }
 }
 

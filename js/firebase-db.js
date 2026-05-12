@@ -60,6 +60,38 @@ export async function deleteCustomerData(phone) {
   await remove(customerRef(phone, ''));
 }
 
+export async function readPendingDraft(phone) {
+  const snap = await get(customerRef(phone, '/pendingDraft'));
+  return snap.exists() ? snap.val() : null;
+}
+
+export function subscribeHoldQueueForChat(phone, cb) {
+  const r = customerRef(phone, '/holdQueue');
+  const handler = (snap) => {
+    const out = [];
+    snap.forEach(child => { out.push({ id: child.key, ...child.val() }); });
+    cb(out);
+  };
+  onValue(r, handler);
+  return () => off(r, 'value', handler);
+}
+
+export async function markHoldHeld(phone, holdId) {
+  await update(customerRef(phone, `/holdQueue/${holdId}`), { held: true });
+}
+
+export async function logAiRating(phone, entry) {
+  const r = push(customerRef(phone, '/aiRatings'));
+  await set(r, { ts: Date.now(), ...entry });
+}
+
+export function subscribeAiUsage(cb) {
+  const r = ref(db, `${ROOT_PATH}/aiUsage`);
+  const handler = (snap) => cb(snap.exists() ? snap.val() : {});
+  onValue(r, handler);
+  return () => off(r, 'value', handler);
+}
+
 export function subscribeAutomationFeed(n, cb) {
   const r = ref(db, `${ROOT_PATH}/automation/feed`);
   const q = query(r, limitToLast(n));

@@ -1,6 +1,7 @@
 import { loadSettings, parseCustomerPhones, getCustomerName, removeCustomer } from './storage.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
 import { openChatFor, closeChat } from './chat.js';
+import { readConfig, readPendingDraft } from './firebase-db.js';
 
 const els = {};
 let allCustomers = [];
@@ -36,7 +37,22 @@ export async function refresh() {
 
   try {
     const idx = await loadWorkoutData();
-    allCustomers = phones.map(p => buildRow(idx, p));
+    const baseRows = phones.map(p => buildRow(idx, p));
+    renderList(baseRows);
+    allCustomers = baseRows;
+    // Pull AI status async — don't block the first paint
+    const fbData = await Promise.all(phones.map(async (p) => {
+      const [cfg, draft] = await Promise.all([
+        readConfig(p).catch(() => null),
+        readPendingDraft(p).catch(() => null),
+      ]);
+      return { phone: p, config: cfg, pendingDraft: draft };
+    }));
+    const byPhone = new Map(fbData.map(d => [d.phone, d]));
+    allCustomers = baseRows.map(r => {
+      const fb = byPhone.get(r.phone);
+      return { ...r, aiMode: fb?.config?.autoCoachMode || 'off', hasDraft: !!fb?.pendingDraft, paused: !!fb?.config?.paused };
+    });
     renderList(allCustomers);
   } catch (err) {
     renderEmpty(`Failed to load: ${err.message}`);
@@ -80,6 +96,16 @@ function renderList(rows) {
   });
 }
 
+function statusPills(c) {
+  const pills = [];
+  const mode = c.aiMode || 'off';
+  if (c.paused) pills.push(`<span class="pill pill-paused" title="Paused — no auto sends">⏸</span>`);
+  else if (mode === 'auto-send') pills.push(`<span class="pill pill-auto" title="AI mode: auto-send">A</span>`);
+  else if (mode === 'draft-only') pills.push(`<span class="pill pill-draft" title="AI mode: draft-only">D</span>`);
+  if (c.hasDraft) pills.push(`<span class="pill pill-pending" title="Pending AI draft waiting for review">🤖</span>`);
+  return pills.length ? `<span class="cust-pills">${pills.join('')}</span>` : '';
+}
+
 function rowHtml(c) {
   if (!c.found) {
     const displayName = c.name || c.phone;
@@ -91,6 +117,7 @@ function rowHtml(c) {
         <div class="cust-body">
           <div class="cust-top">
             <span class="cust-name">${escapeHtml(displayName)}</span>
+            ${statusPills(c)}
           </div>
           <div class="cust-sub"><span class="cust-segment">${escapeHtml(c.name ? c.phone + ' · no workout history yet' : 'No workout history yet')}</span></div>
         </div>
@@ -111,6 +138,7 @@ function rowHtml(c) {
       <div class="cust-body">
         <div class="cust-top">
           <span class="cust-name">${escapeHtml(c.name)}</span>
+          ${statusPills(c)}
           <span class="cust-meta">${escapeHtml(last)}</span>
         </div>
         <div class="cust-sub">

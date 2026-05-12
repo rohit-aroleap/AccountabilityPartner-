@@ -447,20 +447,28 @@ async function processInboundReply(env, payload) {
   }
 
   if (config.autoCoachMode === 'auto-send') {
-    await sendViaPeriskope(env, chatId, draft);
-    await fbPatch(`customers/${phoneKey}/config`, {
-      lastOutboundAt: Date.now(),
-      outboundCountDate: today,
-      outboundCountToday: nextOutboundCount(config, today),
-      lastInboundAt: Date.now(),
-      lastInboundMessageId: data.message_id,
-      autoTurnCount: autoTurnCount + 1,
-    });
-    await fbPush(`customers/${phoneKey}/activity`, {
-      ts: Date.now(), direction: 'outbound', source: 'webhook', action: 'auto-replied',
-      message: draft,
-    });
-    return { acted: 'sent', autoTurnCount: autoTurnCount + 1, debugPrompt: userPrompt, debugCustomerType: customerType, debugSystemType: customerType === 'gym' ? 'gym' : 'coach' };
+    const holdResult = await sendOrHold(env, phoneKey, chatId, draft, 'webhook');
+    if (holdResult.acted === 'sent') {
+      await fbPatch(`customers/${phoneKey}/config`, {
+        lastOutboundAt: Date.now(),
+        outboundCountDate: today,
+        outboundCountToday: nextOutboundCount(config, today),
+        lastInboundAt: Date.now(),
+        lastInboundMessageId: data.message_id,
+        autoTurnCount: autoTurnCount + 1,
+      });
+      await fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(), direction: 'outbound', source: 'webhook', action: 'auto-replied',
+        message: draft,
+      });
+    } else {
+      // Held — counters not bumped, no outbound; pending draft already created
+      await fbPatch(`customers/${phoneKey}/config`, {
+        lastInboundAt: Date.now(),
+        lastInboundMessageId: data.message_id,
+      });
+    }
+    return { acted: holdResult.acted, autoTurnCount: autoTurnCount + (holdResult.acted === 'sent' ? 1 : 0), debugPrompt: userPrompt, debugCustomerType: customerType, debugSystemType: customerType === 'gym' ? 'gym' : 'coach' };
   }
 
   // draft-only
@@ -650,19 +658,26 @@ async function fireScheduledReminder(env, phoneKey, rid, rem, config, global, is
   if (!draft) throw new Error('Empty draft for reminder');
 
   if (config.autoCoachMode === 'auto-send') {
-    await sendViaPeriskope(env, chatId, draft);
-    await fbPatch(`customers/${phoneKey}/config`, {
-      lastOutboundAt: Date.now(),
-      outboundCountDate: today,
-      outboundCountToday: nextOutboundCount(config, today),
-    });
-    await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, {
-      status: 'sent', sentAt: Date.now(), sentMessage: draft,
-    });
-    await fbPush(`customers/${phoneKey}/activity`, {
-      ts: Date.now(), direction: 'outbound', source: 'reminder',
-      action: 'reminder-sent', message: draft, reminderSource: rem.source, reason: rem.reason,
-    });
+    const holdResult = await sendOrHold(env, phoneKey, chatId, draft, 'reminder');
+    if (holdResult.acted === 'sent') {
+      await fbPatch(`customers/${phoneKey}/config`, {
+        lastOutboundAt: Date.now(),
+        outboundCountDate: today,
+        outboundCountToday: nextOutboundCount(config, today),
+      });
+      await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, {
+        status: 'sent', sentAt: Date.now(), sentMessage: draft,
+      });
+      await fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(), direction: 'outbound', source: 'reminder',
+        action: 'reminder-sent', message: draft, reminderSource: rem.source, reason: rem.reason,
+      });
+    } else {
+      // Held — mark reminder as held so we don't fire it again
+      await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, {
+        status: 'held', sentAt: Date.now(), sentMessage: draft,
+      });
+    }
   } else {
     await fbPut(`customers/${phoneKey}/pendingDraft`, {
       ts: Date.now(), message: draft, source: 'reminder',
@@ -808,21 +823,29 @@ async function processCustomer(env, phoneKey, config, workout, ist, today, globa
   if (!draft) throw new Error('Empty draft from Anthropic');
 
   if (config.autoCoachMode === 'auto-send') {
-    await sendViaPeriskope(env, chatId, draft);
-    await fbPatch(`customers/${phoneKey}/config`, {
-      lastOutboundAt: Date.now(),
-      lastOutboundDate: today,
-      lastOutboundReason: 'cron-checkin',
-      outboundCountDate: today,
-      outboundCountToday: nextOutboundCount(config, today),
-    });
-    await fbPush(`customers/${phoneKey}/activity`, {
-      ts: Date.now(),
-      direction: 'outbound',
-      source: 'cron',
-      action: 'sent',
-      message: draft,
-    });
+    const holdResult = await sendOrHold(env, phoneKey, chatId, draft, 'cron');
+    if (holdResult.acted === 'sent') {
+      await fbPatch(`customers/${phoneKey}/config`, {
+        lastOutboundAt: Date.now(),
+        lastOutboundDate: today,
+        lastOutboundReason: 'cron-checkin',
+        outboundCountDate: today,
+        outboundCountToday: nextOutboundCount(config, today),
+      });
+      await fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(),
+        direction: 'outbound',
+        source: 'cron',
+        action: 'sent',
+        message: draft,
+      });
+    } else {
+      // Held — mark cron-checkin done for today so we don't retry this tick, draft already queued
+      await fbPatch(`customers/${phoneKey}/config`, {
+        lastOutboundDate: today,
+        lastOutboundReason: 'cron-checkin',
+      });
+    }
     return true;
   }
 
@@ -901,10 +924,35 @@ async function callAnthropic(env, system, userPrompt) {
       messages: [{ role: 'user', content: userPrompt }],
     }),
   });
-  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) {
+    trackAiUsage(0, 0, DEFAULT_MODEL, true).catch(() => {});
+    throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  }
   const body = await r.json();
+  const usage = body.usage || {};
+  trackAiUsage(usage.input_tokens || 0, usage.output_tokens || 0, body.model || DEFAULT_MODEL, false).catch(() => {});
   const out = (body.content || []).find(c => c.type === 'text')?.text || '';
   return out.trim();
+}
+
+async function trackAiUsage(inputTokens, outputTokens, model, errored) {
+  const ist = istParts(new Date());
+  const date = ist.iso.slice(0, 10);
+  const path = `aiUsage/${date}`;
+  try {
+    const existing = (await fbGet(path)) || {};
+    const next = {
+      inputTokens: (existing.inputTokens || 0) + inputTokens,
+      outputTokens: (existing.outputTokens || 0) + outputTokens,
+      calls: (existing.calls || 0) + 1,
+      errors: (existing.errors || 0) + (errored ? 1 : 0),
+      lastModel: model,
+      lastUpdated: Date.now(),
+    };
+    await fbPut(path, next);
+  } catch (err) {
+    console.error('trackAiUsage failed:', err.message);
+  }
 }
 
 // ============================================================
@@ -1238,9 +1286,54 @@ async function callAnthropicWithModel(env, system, userPrompt, model, maxTokens)
     headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
     body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userPrompt }] }),
   });
-  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) {
+    trackAiUsage(0, 0, model, true).catch(() => {});
+    throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  }
   const body = await r.json();
+  const usage = body.usage || {};
+  trackAiUsage(usage.input_tokens || 0, usage.output_tokens || 0, body.model || model, false).catch(() => {});
   return (body.content || []).find(c => c.type === 'text')?.text?.trim() || '';
+}
+
+async function fbPushAndGetKey(path, value) {
+  const r = await fetch(`${FB_URL}/${FB_ROOT}/${path}.json`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(value),
+  });
+  if (!r.ok) throw new Error(`Firebase POST ${path}: ${r.status}`);
+  const body = await r.json();
+  return body.name;
+}
+
+async function sendOrHold(env, phoneKey, chatId, message, source, holdMs = 10000) {
+  const holdId = await fbPushAndGetKey(`customers/${phoneKey}/holdQueue`, {
+    ts: Date.now(),
+    message,
+    source,
+    sendAt: Date.now() + holdMs,
+    status: 'pending',
+  });
+  await new Promise(resolve => setTimeout(resolve, holdMs));
+  const entry = await fbGet(`customers/${phoneKey}/holdQueue/${holdId}`);
+  if (entry?.held === true) {
+    await fbPut(`customers/${phoneKey}/pendingDraft`, {
+      ts: Date.now(),
+      message,
+      source: `held-${source}`,
+      reason: `Held from auto-send (${source}) — review and Send when ready`,
+    });
+    await fbPatch(`customers/${phoneKey}/holdQueue/${holdId}`, { status: 'held' });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'hold', action: 'held-by-user',
+      message,
+    });
+    return { acted: 'held' };
+  }
+  await sendViaPeriskope(env, chatId, message);
+  await fbPatch(`customers/${phoneKey}/holdQueue/${holdId}`, { status: 'sent' });
+  return { acted: 'sent' };
 }
 
 function buildReplyPrompt({ phone, user, raw, messages, istNow, latestInbound }) {
