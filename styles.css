@@ -435,6 +435,24 @@ form input:focus, form select:focus, form textarea:focus {
   color: rgba(233, 237, 239, 0.6);
 }
 
+.ai-badge {
+  font-size: 10px;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  display: inline-block;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  cursor: default;
+}
+
+.ai-badge.ok { background: rgba(0, 168, 132, 0.18); color: var(--accent); }
+.ai-badge.err { background: rgba(241, 92, 109, 0.18); color: var(--danger); }
+.ai-badge.skip { background: rgba(212, 168, 67, 0.15); color: #d4a843; }
+.ai-badge.warn { background: rgba(212, 168, 67, 0.18); color: #d4a843; }
+.ai-badge.idle { background: var(--border); color: var(--muted); }
+.ai-badge.pending { background: var(--border); color: var(--muted); opacity: 0.7; }
+
 .chat-composer {
   background: var(--panel-2);
   padding: 10px 14px;

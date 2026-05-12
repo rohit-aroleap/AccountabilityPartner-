@@ -2,7 +2,7 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { SYSTEM_COACH, SYSTEM_REPLY, buildDraftPrompt } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat } from './firebase-db.js';
 import { checkOutboundSafety, nextOutboundCount, istDateStr } from './safety.js';
 import { openCustomerSettings } from './customer-settings.js';
 
@@ -12,7 +12,9 @@ let activeCustomer = null;
 let currentMessages = [];
 let pollTimer = null;
 let pendingDraftUnsub = null;
+let webhookEventsUnsub = null;
 let activePendingDraft = null;
+let webhookEventsByMessageId = new Map();
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
@@ -21,23 +23,28 @@ export function initChat() {
 export async function openChatFor(customer) {
   stopPolling();
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
+  if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
   activeCustomer = customer;
   activeChatId = phoneToChatId(customer.phone);
   currentMessages = [];
   activePendingDraft = null;
+  webhookEventsByMessageId = new Map();
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
   pendingDraftUnsub = subscribePendingDraft(customer.phone, onPendingDraftChange);
+  webhookEventsUnsub = subscribeWebhookEventsForChat(activeChatId, 50, onWebhookEventsChange);
 }
 
 export function closeChat() {
   stopPolling();
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
+  if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
   activeChatId = null;
   activeCustomer = null;
   currentMessages = [];
   activePendingDraft = null;
+  webhookEventsByMessageId = new Map();
 }
 
 function renderShell(c) {
@@ -167,12 +174,68 @@ function renderBubble(m) {
   const cls = m.from_me ? 'out' : 'in';
   const ts = formatTime(m.timestamp);
   const body = m.body || mediaLabel(m);
+  const aiBadge = m.from_me ? '' : renderAiBadge(m.message_id);
   return `
-    <div class="bubble ${cls}">
+    <div class="bubble ${cls}" data-message-id="${escapeAttr(m.message_id || '')}">
       <div class="bubble-text">${escapeHtml(body)}</div>
       <div class="bubble-meta">${escapeHtml(ts)}</div>
+      ${aiBadge}
     </div>
   `;
+}
+
+function renderAiBadge(messageId) {
+  if (!messageId) return '';
+  const ev = webhookEventsByMessageId.get(messageId);
+  if (!ev) return `<div class="ai-badge pending" title="No AI decision recorded yet">AI: …</div>`;
+
+  const r = ev.result || {};
+  let cls = 'idle', text = 'AI: —', tooltip = '';
+  if (r.error || ev.error) {
+    cls = 'err';
+    text = `AI: error`;
+    tooltip = r.error || ev.error;
+  } else if (r.acted === 'sent') {
+    cls = 'ok'; text = 'AI: ✓ replied'; tooltip = 'Auto-sent via Periskope';
+  } else if (r.acted === 'drafted') {
+    cls = 'ok'; text = 'AI: drafted'; tooltip = 'Draft queued — review in composer';
+  } else if (r.acted === 'auto-paused') {
+    cls = 'warn'; text = 'AI: paused customer'; tooltip = 'Opt-out keyword detected';
+  } else if (r.ignored) {
+    cls = 'skip'; text = `AI: skip · ${r.ignored}`; tooltip = explainSkip(r.ignored);
+  } else {
+    cls = 'idle'; text = 'AI: no action';
+  }
+  return `<div class="ai-badge ${cls}" title="${escapeAttr(tooltip)}">${escapeHtml(text)}</div>`;
+}
+
+function explainSkip(reason) {
+  const map = {
+    'mode-off': 'Customer AI mode is off — turn on Draft-only or Auto-send in ⚙',
+    'paused': 'Customer is paused (manual or auto-opt-out)',
+    'no-config-for-customer': 'No Firebase config for this phone — open ⚙ and Save once',
+    'daily-cap': 'Already sent 3 messages to this customer today',
+    'quiet-hours': 'Inbound arrived during quiet hours (21:00–08:00 IST)',
+    'max-auto-turns': 'Already replied 4 times this session',
+    'duplicate': 'Same message_id already processed',
+    'group-chat': 'Group chats are ignored',
+    'outbound': 'Message was sent by you (not customer)',
+    'wrong-event': 'Webhook event type was not message.created',
+  };
+  return map[reason] || reason;
+}
+
+function onWebhookEventsChange(map) {
+  webhookEventsByMessageId = map;
+  // Re-render badges in-place without scrolling
+  document.querySelectorAll('.bubble.in[data-message-id]').forEach(el => {
+    const id = el.dataset.messageId;
+    if (!id) return;
+    const oldBadge = el.querySelector('.ai-badge');
+    const newHtml = renderAiBadge(id);
+    if (oldBadge) oldBadge.outerHTML = newHtml;
+    else el.insertAdjacentHTML('beforeend', newHtml);
+  });
 }
 
 function mediaLabel(m) {
@@ -332,4 +395,8 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s);
 }

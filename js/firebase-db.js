@@ -67,3 +67,20 @@ export function subscribeAutomationFeed(n, cb) {
   onValue(q, handler);
   return () => off(q, 'value', handler);
 }
+
+export function subscribeWebhookEventsForChat(chatId, n, cb) {
+  const r = ref(db, `${ROOT_PATH}/automation/feed`);
+  const q = query(r, limitToLast(n));
+  const handler = (snap) => {
+    const map = new Map();
+    snap.forEach(child => {
+      const v = child.val();
+      if (v?.type === 'webhook' && v.chat_id === chatId && v.message_id) {
+        map.set(v.message_id, { id: child.key, ...v });
+      }
+    });
+    cb(map);
+  };
+  onValue(q, handler);
+  return () => off(q, 'value', handler);
+}
