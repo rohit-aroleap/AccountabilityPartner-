@@ -282,8 +282,9 @@ async function processInboundReply(env, payload) {
   const data = payload.data || payload;
   if (!data || typeof data !== 'object') return { ignored: 'no-data' };
 
-  // Event-name check is now informational — Periskope sometimes omits the event field.
-  // Real filtering is by message shape + dedupe via lastInboundMessageId.
+  const global = await getGlobalConfig();
+  if (global.killSwitch) return { ignored: 'kill-switch-on' };
+
   const eventName = payload.event || payload.eventType || payload.type;
   if (eventName && !['message.created', 'message.create', 'message-created', 'created'].includes(eventName)) {
     return { ignored: 'wrong-event', got: eventName };
@@ -341,14 +342,14 @@ async function processInboundReply(env, payload) {
   const ist = istParts(now);
   const today = ist.iso.slice(0, 10);
 
-  if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= SAFETY.maxOutboundPerDay) {
+  if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= global.safety.maxOutboundPerDay) {
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-daily-cap',
     });
     await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
     return { ignored: 'daily-cap' };
   }
-  if (inQuietHours(ist.hm)) {
+  if (inQuietHours(ist.hm, global.safety)) {
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-quiet-hours',
     });
@@ -357,10 +358,10 @@ async function processInboundReply(env, payload) {
   }
 
   const lastInbound = config.lastInboundAt || 0;
-  const sessionIdleMs = SAFETY.sessionIdleMinutes * 60 * 1000;
+  const sessionIdleMs = global.safety.sessionIdleMinutes * 60 * 1000;
   let autoTurnCount = config.autoTurnCount ?? 0;
   if (Date.now() - lastInbound > sessionIdleMs) autoTurnCount = 0;
-  if (autoTurnCount >= SAFETY.maxAutoTurnsPerSession) {
+  if (autoTurnCount >= global.safety.maxAutoTurnsPerSession) {
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-max-auto-turns',
     });
@@ -376,7 +377,8 @@ async function processInboundReply(env, payload) {
   const userPrompt = buildReplyPrompt({
     phone: phoneKey, user, raw: workout, messages, istNow: ist, latestInbound: text,
   });
-  const draft = await callAnthropic(env, SYSTEM_COACH, userPrompt);
+  const systemPrompt = global.prompts?.coach || SYSTEM_COACH;
+  const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
 
   if (config.autoCoachMode === 'auto-send') {
@@ -426,6 +428,12 @@ function detectOptOutKeywords(text) {
 // ============================================================
 
 async function runCron(env) {
+  const global = await getGlobalConfig();
+  if (global.killSwitch) {
+    await logAutomation({ type: 'cron', processed: 0, acted: 0, skipped: [], note: 'kill-switch-on' });
+    return { processed: 0, acted: 0, killSwitch: true };
+  }
+
   const customers = await fbGet('customers');
   if (!customers) {
     await logAutomation({ type: 'cron', processed: 0, acted: 0, skipped: [], note: 'no-customers' });
@@ -446,7 +454,7 @@ async function runCron(env) {
     if (!config) continue;
     if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) { skipped.push({ phoneKey, why: 'mode-off' }); continue; }
     if (config.paused) { skipped.push({ phoneKey, why: 'paused' }); continue; }
-    if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= SAFETY.maxOutboundPerDay) {
+    if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= global.safety.maxOutboundPerDay) {
       skipped.push({ phoneKey, why: 'daily-cap' });
       continue;
     }
@@ -455,16 +463,16 @@ async function runCron(env) {
       continue;
     }
     const sendTime = config.sendTimeIST || '08:00';
-    if (!isInSendWindow(ist.hm, sendTime, SAFETY.sendWindowMin)) {
+    if (!isInSendWindow(ist.hm, sendTime, global.safety.sendWindowMin)) {
       skipped.push({ phoneKey, why: 'outside-window', current: ist.hm, want: sendTime });
       continue;
     }
-    if (inQuietHours(ist.hm)) { skipped.push({ phoneKey, why: 'quiet-hours' }); continue; }
+    if (inQuietHours(ist.hm, global.safety)) { skipped.push({ phoneKey, why: 'quiet-hours' }); continue; }
 
     processed++;
     try {
       if (!workoutCache) workoutCache = await fetchWorkout(env);
-      const didAct = await processCustomer(env, phoneKey, config, workoutCache, ist, today);
+      const didAct = await processCustomer(env, phoneKey, config, workoutCache, ist, today, global);
       if (didAct) acted++;
     } catch (err) {
       await fbPush(`customers/${phoneKey}/activity`, {
@@ -481,7 +489,7 @@ async function runCron(env) {
   return { processed, acted, skipped, now: ist.iso };
 }
 
-async function processCustomer(env, phoneKey, config, workout, ist, today) {
+async function processCustomer(env, phoneKey, config, workout, ist, today, global) {
   const chatId = `${phoneKey}@c.us`;
   const user = findUserInWorkout(workout, phoneKey);
 
@@ -489,7 +497,8 @@ async function processCustomer(env, phoneKey, config, workout, ist, today) {
   const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
 
   const userPrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
-  const draft = await callAnthropic(env, SYSTEM_COACH, userPrompt);
+  const systemPrompt = global?.prompts?.coach || SYSTEM_COACH;
+  const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
 
   if (config.autoCoachMode === 'auto-send') {
@@ -746,10 +755,38 @@ function isInSendWindow(currentHM, sendTimeHM, windowMin) {
   return currMin >= sendMin && currMin < sendMin + windowMin;
 }
 
-function inQuietHours(hm) {
-  const { quietHoursStart: s, quietHoursEnd: e } = SAFETY;
+function inQuietHours(hm, safety = SAFETY) {
+  const s = safety.quietHoursStart;
+  const e = safety.quietHoursEnd;
   if (s <= e) return hm >= s && hm < e;
   return hm >= s || hm < e;
+}
+
+let _globalConfigCache = null;
+let _globalConfigFetchedAt = 0;
+const GLOBAL_CONFIG_TTL_MS = 20_000;
+
+async function getGlobalConfig() {
+  if (_globalConfigCache && Date.now() - _globalConfigFetchedAt < GLOBAL_CONFIG_TTL_MS) {
+    return _globalConfigCache;
+  }
+  try {
+    const cfg = await fbGet('globalConfig');
+    _globalConfigCache = {
+      killSwitch: cfg?.killSwitch === true,
+      prompts: {
+        coach: cfg?.prompts?.coach || SYSTEM_COACH,
+        reply: cfg?.prompts?.reply || SYSTEM_REPLY,
+      },
+      safety: { ...SAFETY, ...(cfg?.safety || {}) },
+    };
+    _globalConfigFetchedAt = Date.now();
+  } catch (err) {
+    console.error('getGlobalConfig failed, using defaults:', err.message);
+    _globalConfigCache = { killSwitch: false, prompts: { coach: SYSTEM_COACH, reply: SYSTEM_REPLY }, safety: { ...SAFETY } };
+    _globalConfigFetchedAt = Date.now();
+  }
+  return _globalConfigCache;
 }
 
 function tsMs(ts) {

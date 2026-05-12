@@ -17,6 +17,14 @@ export function initSettings() {
 
   els.openBtn.addEventListener('click', openModal);
   els.closeBtn.addEventListener('click', closeModal);
+  const tuneBtn = document.getElementById('open-tune-ai');
+  if (tuneBtn) {
+    tuneBtn.addEventListener('click', async () => {
+      closeModal();
+      const { openTuneAi } = await import('./tune-ai.js');
+      openTuneAi();
+    });
+  }
   els.modal.addEventListener('click', (e) => {
     if (e.target === els.modal) closeModal();
   });

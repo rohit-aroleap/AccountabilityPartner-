@@ -1,6 +1,6 @@
 import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
-import { SYSTEM_COACH, SYSTEM_REPLY, buildDraftPrompt } from './prompt.js';
+import { buildDraftPrompt, getSystemCoach, getSystemReply } from './prompt.js';
 import { loadSettings } from './storage.js';
 import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat } from './firebase-db.js';
 import { checkOutboundSafety, nextOutboundCount, istDateStr } from './safety.js';
@@ -361,7 +361,7 @@ async function onDraft(mode) {
     const { anthropicModel } = loadSettings();
     const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode });
     const draft = await generateMessage({
-      system: mode === 'coach' ? SYSTEM_COACH : SYSTEM_REPLY,
+      system: mode === 'coach' ? getSystemCoach() : getSystemReply(),
       userPrompt,
       model: anthropicModel,
       maxTokens: 600,
