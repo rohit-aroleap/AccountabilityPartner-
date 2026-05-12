@@ -607,18 +607,23 @@ async function seedPostWorkoutReminders(env, customers, ist, today) {
 
     const ageMs = Date.now() - todayActivity.lastExerciseTs;
     if (ageMs < 0) continue;
-    if (ageMs > 90 * 60 * 1000) continue;
+    if (ageMs > 4 * 60 * 60 * 1000) continue;
 
     const fireAt = Date.now() + 10 * 60 * 1000;
     const exerciseCount = todayActivity.exerciseCount || 0;
     const mins = Math.round((todayActivity.totalDuration || 0) / 60);
+    const ageMin = Math.floor(ageMs / 60000);
+    let timingNote;
+    if (ageMin < 30) timingNote = 'just finished';
+    else if (ageMin < 90) timingNote = `finished about ${ageMin} min ago`;
+    else timingNote = `finished about ${Math.round(ageMin / 60)} h ago — earlier today, not right now`;
 
     await fbPush(`customers/${phoneKey}/scheduledReminders`, {
       ts: Date.now(),
       fireAt,
       status: 'pending',
       source: 'post-workout',
-      reason: `Customer just completed a workout (${exerciseCount} exercises, ${mins} min, finished ~${Math.floor(ageMs / 60000)} min ago). Acknowledge it specifically — reference the session size or duration if it stands out; reference the streak if continuing one. Keep it warm and brief.`,
+      reason: `Customer ${timingNote}: a workout with ${exerciseCount} exercises, ${mins} min total. Acknowledge it specifically — reference the session size or duration if it stands out; reference the streak if continuing one. Match the timing — don't say "just now" if it was hours ago.`,
     });
     await fbPatch(`customers/${phoneKey}/config`, { lastPostWorkoutDate: today });
     await fbPush(`customers/${phoneKey}/activity`, {

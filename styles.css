@@ -1400,6 +1400,27 @@ input.toggle {
   white-space: nowrap;
 }
 
+.nu-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nu-status-ok {
+  background: rgba(0, 168, 132, 0.15);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.nu-status-warn {
+  background: rgba(212, 168, 67, 0.12);
+  color: #d4a843;
+  border: 1px solid #d4a843;
+}
+
 .pending-draft[hidden] { display: none; }
 
 .pd-label {

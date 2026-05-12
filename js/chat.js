@@ -428,13 +428,32 @@ function computeNextUp(config, reminders, customer) {
 
   const modeLabel = config.autoCoachMode === 'auto-send' ? 'auto-sends' : 'queues a draft';
 
-  if (!next) {
-    return `<span class="nu-icon">💬</span><span class="nu-text">No scheduled events. AI ${modeLabel} when ${escapeHtml(customer?.name || 'this customer')} messages.</span>`;
+  // Workout-today status for Ferra customers
+  let workoutStatus = '';
+  if (customer?.found && customer.daysSinceLastSession === 0) {
+    const istNow = new Date(Date.now() + 5.5 * 60 * 60000);
+    const today = istNow.toISOString().slice(0, 10);
+    const hasPendingPostWorkout = candidates.some(c => c.source === 'post-workout');
+    if (hasPendingPostWorkout) {
+      // The pending reminder will be the "next" entry — no extra status needed
+    } else if (config.lastPostWorkoutDate === today) {
+      workoutStatus = `<span class="nu-status nu-status-ok">🏋️ Today's workout acknowledged</span>`;
+    } else {
+      workoutStatus = `<span class="nu-status nu-status-warn">🏋️ Worked out today — ack window passed</span>`;
+    }
   }
-  const rel = relativeFuture(next.when - now);
-  const abs = formatAbsolute(next.when);
-  const kindLabel = next.kind === 'cron' ? '⏰' : '📅';
-  return `<span class="nu-icon">${kindLabel}</span><span class="nu-text">Next: ${escapeHtml(next.label)} · ${escapeHtml(abs)} (${escapeHtml(rel)})</span>`;
+
+  let mainHtml;
+  if (!next) {
+    mainHtml = `<span class="nu-icon">💬</span><span class="nu-text">No scheduled events. AI ${modeLabel} when ${escapeHtml(customer?.name || 'this customer')} messages.</span>`;
+  } else {
+    const rel = relativeFuture(next.when - now);
+    const abs = formatAbsolute(next.when);
+    const kindLabel = next.kind === 'cron' ? '⏰' : '📅';
+    mainHtml = `<span class="nu-icon">${kindLabel}</span><span class="nu-text">Next: ${escapeHtml(next.label)} · ${escapeHtml(abs)} (${escapeHtml(rel)})</span>`;
+  }
+
+  return mainHtml + workoutStatus;
 }
 
 function shortReason(r) {
