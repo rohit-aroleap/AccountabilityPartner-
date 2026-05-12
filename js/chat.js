@@ -150,7 +150,7 @@ export async function openChatFor(customer) {
   await refreshMessages({ scroll: true });
   startPolling();
   pendingDraftUnsub = subscribePendingDraft(customer.phone, onPendingDraftChange);
-  webhookEventsUnsub = subscribeWebhookEventsForChat(activeChatId, 50, onWebhookEventsChange);
+  webhookEventsUnsub = subscribeWebhookEventsForChat(activeChatId, 300, onWebhookEventsChange);
   holdQueueUnsub = subscribeHoldQueueForChat(customer.phone, onHoldQueueChange);
   configUnsub = subscribeConfig(customer.phone, onConfigChange);
   remindersUnsub = subscribeScheduledReminders(customer.phone, 20, onRemindersChange);
@@ -691,6 +691,14 @@ function renderAiBadge(messageId) {
     if (replayedMessageIds.has(messageId)) {
       return `<div class="ai-badge pending" title="Replay sent — waiting for worker result (~5-15s)">AI: replaying…</div>`;
     }
+    // Try to find the message in currentMessages and check its age
+    const msg = currentMessages.find(m => m.message_id === messageId);
+    const ts = msg ? parseTimestamp(msg.timestamp) : 0;
+    const ageMs = ts ? Date.now() - ts : 0;
+    if (ts && ageMs > 30 * 60 * 1000) {
+      // Older than 30 min and no entry — likely pushed out of the dashboard's visible window
+      return `<div class="ai-badge idle" title="No entry visible — dashboard only shows the most recent 300 automation events. The actual processing likely happened (AI replied below).">AI: out of view</div>`;
+    }
     return `<div class="ai-badge pending" title="No AI decision recorded yet — auto-replay fires after 60s if Periskope didn't deliver">AI: …</div>`;
   }
 
@@ -754,6 +762,7 @@ async function maybeReplayOrphanInbounds() {
   if (!activeCustomer || !activeChatId) return;
   const startTs = activeCustomerConfig?.conversationStartTs || 0;
   const now = Date.now();
+  const REPLAY_MAX_AGE_MS = 30 * 60 * 1000; // only replay inbounds from the last 30 minutes
   const orphans = [];
   for (const m of currentMessages) {
     if (m.from_me === true) continue;
@@ -762,6 +771,7 @@ async function maybeReplayOrphanInbounds() {
     if (!ts) continue;
     if (startTs && ts < startTs) continue;
     if (now - ts < 60_000) continue; // give Periskope 60s before replaying
+    if (now - ts > REPLAY_MAX_AGE_MS) continue; // too old — don't retroactively process
     if (webhookEventsByMessageId.has(m.message_id)) continue;
     if (replayedMessageIds.has(m.message_id)) continue;
     orphans.push(m);
