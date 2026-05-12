@@ -1,4 +1,5 @@
-import { readConfig, writeConfig, subscribeActivity, subscribeWorkoutLog, subscribeScheduledReminders, cancelScheduledReminder } from './firebase-db.js';
+import { readConfig, writeConfig, subscribeActivity, subscribeWorkoutLog, subscribeScheduledReminders, cancelScheduledReminder, deleteCustomerData } from './firebase-db.js';
+import { removeCustomer } from './storage.js';
 import { SAFETY, checkOutboundSafety } from './safety.js';
 import { isPhoneInFerraExport } from './workout.js';
 
@@ -19,10 +20,16 @@ let activityUnsub = null;
 let workoutLogUnsub = null;
 let remindersUnsub = null;
 let autoDetectedType = '';
+let currentCustomerName = '';
 const listeners = new Set();
+const deletedListeners = new Set();
 
 export function onConfigChanged(fn) {
   listeners.add(fn);
+}
+
+export function onCustomerRemoved(fn) {
+  deletedListeners.add(fn);
 }
 
 export function initCustomerSettings() {
@@ -100,6 +107,12 @@ export function initCustomerSettings() {
           <h3>Recent activity</h3>
           <div id="cs-activity" class="cs-activity">Loading…</div>
         </div>
+
+        <div class="cs-section cs-danger">
+          <h3>Danger zone</h3>
+          <p class="cs-danger-blurb">Permanently delete this customer and every piece of data the dashboard stores about them — config, activity log, workout log, scheduled reminders, pending drafts. The WhatsApp thread on Periskope is NOT touched. Can't be undone.</p>
+          <button type="button" class="btn-danger" id="cs-delete">Delete customer completely</button>
+        </div>
       </div>
       <div class="modal-footer">
         <span id="cs-save-status" class="status"></span>
@@ -115,10 +128,39 @@ export function initCustomerSettings() {
   document.getElementById('cs-cancel').addEventListener('click', closeModal);
   document.getElementById('cs-form').addEventListener('submit', onSave);
   document.getElementById('cs-type').addEventListener('change', onTypeChange);
+  document.getElementById('cs-delete').addEventListener('click', onDelete);
+}
+
+async function onDelete() {
+  if (!currentPhone) return;
+  const label = currentCustomerName ? `${currentCustomerName} (${currentPhone})` : currentPhone;
+  const ok = confirm(
+    `Permanently delete ${label}?\n\n` +
+    `This will erase from this dashboard:\n` +
+    `  • Customer config (mode, send time, notes, type)\n` +
+    `  • Activity log\n` +
+    `  • Workout log\n` +
+    `  • Scheduled reminders (pending + sent)\n` +
+    `  • Pending drafts\n\n` +
+    `The WhatsApp thread on Periskope is NOT touched — you can still see it there.\n\n` +
+    `This cannot be undone. Continue?`
+  );
+  if (!ok) return;
+  const status = document.getElementById('cs-save-status');
+  status.textContent = 'Deleting…';
+  try {
+    await deleteCustomerData(currentPhone);
+    removeCustomer(currentPhone);
+    deletedListeners.forEach(fn => { try { fn(currentPhone); } catch (err) { console.error(err); } });
+    closeModal();
+  } catch (err) {
+    status.textContent = `Delete failed: ${err.message}`;
+  }
 }
 
 export async function openCustomerSettings(customer) {
   currentPhone = customer.phone;
+  currentCustomerName = customer.name || '';
   document.getElementById('cs-title').textContent = `Settings — ${customer.name || customer.phone}`;
   const saved = await readConfig(customer.phone);
   currentConfig = { ...DEFAULT_CONFIG, ...(saved || {}) };

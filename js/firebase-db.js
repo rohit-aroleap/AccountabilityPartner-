@@ -56,6 +56,10 @@ export async function clearPendingDraft(phone) {
   await remove(customerRef(phone, '/pendingDraft'));
 }
 
+export async function deleteCustomerData(phone) {
+  await remove(customerRef(phone, ''));
+}
+
 export function subscribeAutomationFeed(n, cb) {
   const r = ref(db, `${ROOT_PATH}/automation/feed`);
   const q = query(r, limitToLast(n));
