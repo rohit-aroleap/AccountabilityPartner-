@@ -1,5 +1,5 @@
 import { loadGlobalConfig, saveGlobalConfig, getCachedGlobalConfig } from './global-config.js';
-import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SAFETY } from './defaults.js';
+import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY } from './defaults.js';
 import { parseCustomerPhones, loadSettings } from './storage.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
 import { generateMessage } from './anthropic.js';
@@ -21,6 +21,7 @@ export function initTuneAi() {
   document.getElementById('tune-form').addEventListener('submit', onSave);
   document.getElementById('tune-reset-coach').addEventListener('click', () => resetField('coach'));
   document.getElementById('tune-reset-reply').addEventListener('click', () => resetField('reply'));
+  document.getElementById('tune-reset-gym').addEventListener('click', () => resetField('gym'));
   document.getElementById('tune-sandbox-run').addEventListener('click', runSandbox);
   modalEl.querySelectorAll('.tune-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -55,6 +56,7 @@ function hydrateForm() {
   f.killSwitch.checked = !!working.killSwitch;
   f.coach.value = working.prompts.coach;
   f.reply.value = working.prompts.reply;
+  f.gym.value = working.prompts.gym;
   for (const k of Object.keys(DEFAULT_SAFETY)) {
     if (f[k]) f[k].value = working.safety[k];
   }
@@ -64,6 +66,7 @@ function resetField(key) {
   const f = document.getElementById('tune-form');
   if (key === 'coach') f.coach.value = DEFAULT_SYSTEM_COACH;
   if (key === 'reply') f.reply.value = DEFAULT_SYSTEM_REPLY;
+  if (key === 'gym') f.gym.value = DEFAULT_SYSTEM_GYM_COACH;
 }
 
 async function onSave(e) {
@@ -75,6 +78,7 @@ async function onSave(e) {
     prompts: {
       coach: (data.get('coach') || '').trim() || DEFAULT_SYSTEM_COACH,
       reply: (data.get('reply') || '').trim() || DEFAULT_SYSTEM_REPLY,
+      gym: (data.get('gym') || '').trim() || DEFAULT_SYSTEM_GYM_COACH,
     },
     safety: {
       quietHoursStart: (data.get('quietHoursStart') || '21:00').trim(),
@@ -136,7 +140,11 @@ async function runSandbox() {
 
     const userPrompt = await buildDraftPrompt(customer, recentMessages, { intent: '', mode });
     const cfg = getCachedGlobalConfig() || DEFAULT_GLOBAL;
-    const systemPrompt = mode === 'coach' ? cfg.prompts.coach : cfg.prompts.reply;
+    // Pick prompt based on customer type — gym customers get the gym prompt for coach mode
+    const isGym = !customer.found;
+    const systemPrompt = mode === 'reply'
+      ? cfg.prompts.reply
+      : (isGym ? cfg.prompts.gym : cfg.prompts.coach);
     const { anthropicModel } = loadSettings();
     const draft = await generateMessage({ system: systemPrompt, userPrompt, model: anthropicModel, maxTokens: 600 });
     out.textContent = draft || '(empty response)';
@@ -179,6 +187,14 @@ function buildModalHtml() {
               </div>
               <textarea id="tune-coach" name="coach" rows="18" spellcheck="false"></textarea>
               <div class="help">Used by ✨ Coach button, cron morning check-ins, and webhook auto-replies. Workout accountability is the mission.</div>
+            </div>
+            <div class="field">
+              <div class="field-label-row">
+                <label for="tune-gym">Gym Coach system prompt</label>
+                <button type="button" class="link-btn" id="tune-reset-gym">Reset to default</button>
+              </div>
+              <textarea id="tune-gym" name="gym" rows="16" spellcheck="false"></textarea>
+              <div class="help">Used for customers marked as type "gym" — they don't use Ferra, so there's no automatic workout data. AI relies on chat + weekly goal + manually/auto-logged workouts.</div>
             </div>
             <div class="field">
               <div class="field-label-row">

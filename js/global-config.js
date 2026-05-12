@@ -47,6 +47,7 @@ function mergeWithDefaults(cfg) {
     prompts: {
       coach: cfg?.prompts?.coach || DEFAULT_GLOBAL.prompts.coach,
       reply: cfg?.prompts?.reply || DEFAULT_GLOBAL.prompts.reply,
+      gym: cfg?.prompts?.gym || DEFAULT_GLOBAL.prompts.gym,
     },
     safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
   };

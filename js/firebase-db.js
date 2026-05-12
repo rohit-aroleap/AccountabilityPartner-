@@ -68,6 +68,23 @@ export function subscribeAutomationFeed(n, cb) {
   return () => off(q, 'value', handler);
 }
 
+export function subscribeWorkoutLog(phone, n, cb) {
+  const r = customerRef(phone, '/workoutLog');
+  const q = query(r, limitToLast(n));
+  const handler = (snap) => {
+    const out = [];
+    snap.forEach(child => { out.push({ id: child.key, ...child.val() }); });
+    cb(out.reverse());
+  };
+  onValue(q, handler);
+  return () => off(q, 'value', handler);
+}
+
+export async function logWorkout(phone, entry) {
+  const r = push(customerRef(phone, '/workoutLog'));
+  await set(r, { ts: Date.now(), ...entry });
+}
+
 export function subscribeWebhookEventsForChat(chatId, n, cb) {
   const r = ref(db, `${ROOT_PATH}/automation/feed`);
   const q = query(r, limitToLast(n));

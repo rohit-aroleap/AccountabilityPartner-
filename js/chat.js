@@ -1,8 +1,23 @@
 import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
-import { buildDraftPrompt, getSystemCoach, getSystemReply } from './prompt.js';
+import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
 import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat } from './firebase-db.js';
+import { ref, get, query, limitToLast } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { db, ROOT_PATH } from './firebase-init.js';
+
+async function loadRecentWorkoutLog(phone) {
+  const key = String(phone).replace(/[^\d]/g, '');
+  try {
+    const r = query(ref(db, `${ROOT_PATH}/customers/${key}/workoutLog`), limitToLast(20));
+    const snap = await get(r);
+    const out = [];
+    snap.forEach(child => { out.push({ id: child.key, ...child.val() }); });
+    return out.reverse();
+  } catch {
+    return [];
+  }
+}
 import { checkOutboundSafety, nextOutboundCount, istDateStr } from './safety.js';
 import { openCustomerSettings } from './customer-settings.js';
 
@@ -359,9 +374,11 @@ async function onDraft(mode) {
 
   try {
     const { anthropicModel } = loadSettings();
-    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode });
+    const config = (await readConfig(activeCustomer.phone)) || {};
+    const workoutLog = await loadRecentWorkoutLog(activeCustomer.phone);
+    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode, config, workoutLog });
     const draft = await generateMessage({
-      system: mode === 'coach' ? getSystemCoach() : getSystemReply(),
+      system: getSystemForCustomer(activeCustomer, mode, config),
       userPrompt,
       model: anthropicModel,
       maxTokens: 600,

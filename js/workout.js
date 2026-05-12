@@ -60,6 +60,15 @@ export function normalizePhone(phone) {
   return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
 }
 
+export async function isPhoneInFerraExport(phone) {
+  try {
+    const idx = await loadWorkoutData();
+    return !!idx.byPhone.get(normalizePhone(phone));
+  } catch {
+    return false;
+  }
+}
+
 export function getDailyActivity(idx, uid, dateStr) {
   const months = idx.userMonthlySummaries[uid] || [];
   for (const m of months) {

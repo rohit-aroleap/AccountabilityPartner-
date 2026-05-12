@@ -61,6 +61,31 @@ Style:
 
 Output ONLY the WhatsApp message text. No quotes. No preamble. No "Here's a draft:" wrapper. No explanation.`;
 
+const SYSTEM_GYM_COACH = `You are Rohit Patel. This customer does NOT use the Ferra machine — they train at a gym or elsewhere. You're their online accountability partner. You have no automatic workout data — you only know what they've told you in WhatsApp and what they've reported as completed workouts.
+
+Your job:
+- Make sure they hit their stated weekly workout goal
+- When they report a workout, acknowledge it specifically (e.g., "nice, that's leg day done — solid")
+- When you haven't heard from them, ASK directly: "Did you train today?" / "Where are we with this week's count?"
+- Reference their weekly goal explicitly: "you're at 2/4 for the week"
+- If they're falling behind, surface it gently — never preachy
+- Help them name what's blocking when they slip
+
+Hard rules:
+- Don't pretend to have workout data you don't have. You only know what they've reported.
+- If the chat is on an unrelated topic, acknowledge in one line, then pivot to training
+- Never claim to have called, met, or done anything you didn't actually do
+- Don't say "I noticed" — just state it directly
+
+Style:
+- Warm, direct, brief — usually 1 to 3 short sentences
+- Casual English suitable for Indian customers; mix in Hindi if natural ("kal", "aaj", "bhai")
+- Be SPECIFIC to what they reported, not generic
+- Sound like a human trainer-friend, not a marketing bot
+- No emojis unless they used them first
+
+Output ONLY the WhatsApp message text. No quotes. No preamble. No "Here's a draft:" wrapper.`;
+
 // ============================================================
 // Entrypoints
 // ============================================================
@@ -371,15 +396,28 @@ async function processInboundReply(env, payload) {
 
   const workout = await fetchWorkout(env);
   const user = findUserInWorkout(workout, phoneKey);
+  const customerType = resolveCustomerType(config, user);
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
   const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
 
-  const userPrompt = buildReplyPrompt({
-    phone: phoneKey, user, raw: workout, messages, istNow: ist, latestInbound: text,
-  });
-  const systemPrompt = global.prompts?.coach || SYSTEM_COACH;
+  let userPrompt, systemPrompt;
+  if (customerType === 'gym') {
+    const workoutLog = await fetchWorkoutLog(phoneKey, 20);
+    userPrompt = buildGymPrompt({ phone: phoneKey, user, config, messages, istNow: ist, workoutLog, latestInbound: text, mode: 'reply' });
+    systemPrompt = global.prompts?.gym || SYSTEM_GYM_COACH;
+  } else {
+    userPrompt = buildReplyPrompt({
+      phone: phoneKey, user, raw: workout, messages, istNow: ist, latestInbound: text,
+    });
+    systemPrompt = global.prompts?.coach || SYSTEM_COACH;
+  }
   const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
+
+  // For gym customers, fire-and-forget Haiku call to extract workout if reported
+  if (customerType === 'gym' && text) {
+    extractAndLogWorkout(env, phoneKey, text, ist).catch(err => console.error('extract failed:', err.message));
+  }
 
   if (config.autoCoachMode === 'auto-send') {
     await sendViaPeriskope(env, chatId, draft);
@@ -492,12 +530,20 @@ async function runCron(env) {
 async function processCustomer(env, phoneKey, config, workout, ist, today, global) {
   const chatId = `${phoneKey}@c.us`;
   const user = findUserInWorkout(workout, phoneKey);
+  const customerType = resolveCustomerType(config, user);
 
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
   const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
 
-  const userPrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
-  const systemPrompt = global?.prompts?.coach || SYSTEM_COACH;
+  let userPrompt, systemPrompt;
+  if (customerType === 'gym') {
+    const workoutLog = await fetchWorkoutLog(phoneKey, 20);
+    userPrompt = buildGymPrompt({ phone: phoneKey, user, config, messages, istNow: ist, workoutLog, mode: 'cron' });
+    systemPrompt = global?.prompts?.gym || SYSTEM_GYM_COACH;
+  } else {
+    userPrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
+    systemPrompt = global?.prompts?.coach || SYSTEM_COACH;
+  }
   const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
 
@@ -710,6 +756,150 @@ function buildCronCheckinPrompt({ phone, user, raw, messages, istNow }) {
   return lines.join('\n');
 }
 
+function resolveCustomerType(config, ferraUser) {
+  const explicit = config?.customerType;
+  if (explicit === 'ferra' || explicit === 'gym') return explicit;
+  return ferraUser ? 'ferra' : 'gym';
+}
+
+async function fetchWorkoutLog(phoneKey, limit) {
+  try {
+    const r = await fetch(`${FB_URL}/${FB_ROOT}/customers/${phoneKey}/workoutLog.json?orderBy="$key"&limitToLast=${limit}`);
+    if (!r.ok) return [];
+    const data = await r.json();
+    if (!data) return [];
+    const entries = Object.entries(data).map(([id, v]) => ({ id, ...v }));
+    entries.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function buildGymPrompt({ phone, user, config, messages, istNow, workoutLog, latestInbound, mode }) {
+  const todayStr = istNow.iso.slice(0, 10);
+  const lines = [];
+  lines.push(`Today: ${todayStr} (${istNow.dayName}), ${istNow.hm} IST`);
+  lines.push('');
+  lines.push(`Customer: ${user?.name || `+${phone}`}`);
+  lines.push(`Phone: +${phone}`);
+  lines.push(`Customer type: Gym / other (NOT Ferra machine — no automatic workout data)`);
+
+  const weeklyGoal = parseInt(config?.weeklyGoal, 10) || 3;
+  lines.push(`Weekly workout goal: ${weeklyGoal} sessions`);
+
+  // Determine this Monday
+  const today = new Date(istNow.iso.slice(0, 10) + 'T00:00:00Z');
+  const day = today.getUTCDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  const monday = new Date(today.getTime() + diff * 86400000);
+  const mondayStr = monday.toISOString().slice(0, 10);
+
+  const thisWeek = (workoutLog || []).filter(w => (w.date || '') >= mondayStr);
+  lines.push(`Workouts reported this week (since ${mondayStr}): ${thisWeek.length} of ${weeklyGoal}`);
+  if (thisWeek.length > 0) {
+    lines.push('');
+    lines.push('This week\'s sessions:');
+    for (const w of thisWeek) {
+      lines.push(`  ${w.date || formatMessageTs(w.ts)}: ${w.type || 'workout'}${w.details ? ' — ' + w.details : ''}`);
+    }
+  }
+
+  const recentLog = (workoutLog || []).slice(0, 10);
+  if (recentLog.length > 0) {
+    lines.push('');
+    lines.push('Recent workout log (last 10, newest first):');
+    for (const w of recentLog) {
+      lines.push(`  ${w.date || formatMessageTs(w.ts)}: ${w.type || 'workout'}${w.details ? ' — ' + w.details : ''}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('Recent WhatsApp messages (oldest first, last 20):');
+  const last20 = (messages || []).slice(-20);
+  if (last20.length === 0) lines.push('  (no prior conversation)');
+  else for (const m of last20) {
+    const who = m.from_me ? 'me' : (user?.name || 'them');
+    const ts = formatMessageTs(m.timestamp);
+    const body = (m.body || '').replace(/\s+/g, ' ').trim();
+    lines.push(`  [${ts} | ${who}] ${body}`);
+  }
+
+  lines.push('');
+  if (mode === 'reply' && latestInbound) {
+    lines.push(`Customer just sent: "${latestInbound.slice(0, 500)}"`);
+    lines.push('');
+    lines.push('Draft my reply. If they reported a workout, acknowledge it specifically and reference the weekly progress. If they asked something, answer briefly then anchor on training.');
+  } else {
+    lines.push('Draft an accountability check-in. Reference where they are on this week\'s goal. If they haven\'t reported in a day or two, ASK directly whether they trained.');
+  }
+  return lines.join('\n');
+}
+
+async function extractAndLogWorkout(env, phoneKey, messageBody, ist) {
+  const prompt = `Did this WhatsApp message from a customer indicate they COMPLETED a physical workout/training session? Be conservative — only count clear past-tense reports of done workouts, not future intentions or vague mentions.
+
+Message: "${messageBody}"
+
+Output ONLY a JSON object with this exact shape, nothing else:
+{ "logged": false }
+or:
+{ "logged": true, "type": "<one of: legs, push, pull, full-body, cardio, yoga, sports, general>", "details": "<short summary, max 80 chars>" }
+
+Examples:
+  "did legs today" → { "logged": true, "type": "legs", "details": "leg day" }
+  "30 min cardio done" → { "logged": true, "type": "cardio", "details": "30 min cardio" }
+  "feeling tired" → { "logged": false }
+  "going to gym now" → { "logged": false }
+  "just finished my workout, full body" → { "logged": true, "type": "full-body", "details": "full body workout" }
+  "did upper today, chest and back" → { "logged": true, "type": "push", "details": "chest and back" }`;
+
+  let text;
+  try {
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 200);
+  } catch (err) {
+    console.error('Haiku extract call failed:', err.message);
+    return;
+  }
+  if (!text) return;
+
+  let parsed;
+  try {
+    const cleaned = text.trim().replace(/^```json\s*|\s*```$/g, '').trim();
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return;
+  }
+  if (parsed?.logged !== true || !parsed.type) return;
+
+  await fbPush(`customers/${phoneKey}/workoutLog`, {
+    ts: Date.now(),
+    date: ist.iso.slice(0, 10),
+    type: parsed.type,
+    details: (parsed.details || '').slice(0, 80),
+    source: 'auto-extracted',
+    raw: messageBody.slice(0, 200),
+  });
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(),
+    direction: 'system',
+    source: 'webhook',
+    action: 'workout-auto-logged',
+    message: `${parsed.type}: ${parsed.details || ''}`,
+  });
+}
+
+async function callAnthropicWithModel(env, system, userPrompt, model, maxTokens) {
+  const r = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: 'POST',
+    headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userPrompt }] }),
+  });
+  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const body = await r.json();
+  return (body.content || []).find(c => c.type === 'text')?.text?.trim() || '';
+}
+
 function buildReplyPrompt({ phone, user, raw, messages, istNow, latestInbound }) {
   // Same context as cron check-in, but framed as "customer just messaged, draft my reply"
   const base = buildCronCheckinPrompt({ phone, user, raw, messages, istNow });
@@ -777,13 +967,14 @@ async function getGlobalConfig() {
       prompts: {
         coach: cfg?.prompts?.coach || SYSTEM_COACH,
         reply: cfg?.prompts?.reply || SYSTEM_REPLY,
+        gym: cfg?.prompts?.gym || SYSTEM_GYM_COACH,
       },
       safety: { ...SAFETY, ...(cfg?.safety || {}) },
     };
     _globalConfigFetchedAt = Date.now();
   } catch (err) {
     console.error('getGlobalConfig failed, using defaults:', err.message);
-    _globalConfigCache = { killSwitch: false, prompts: { coach: SYSTEM_COACH, reply: SYSTEM_REPLY }, safety: { ...SAFETY } };
+    _globalConfigCache = { killSwitch: false, prompts: { coach: SYSTEM_COACH, reply: SYSTEM_REPLY, gym: SYSTEM_GYM_COACH }, safety: { ...SAFETY } };
     _globalConfigFetchedAt = Date.now();
   }
   return _globalConfigCache;
