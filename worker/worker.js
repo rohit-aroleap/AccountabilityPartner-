@@ -560,12 +560,18 @@ async function runCron(env) {
 
   // After morning check-ins, seed automatic reminders and fire any due ones
   let seededCount = 0;
+  let postWorkoutCount = 0;
   let firedCount = 0;
   let firedDetail = [];
   try {
     seededCount = await seedAutomaticReminders(env, customers, ist, today);
   } catch (err) {
     console.error('seedAutomaticReminders failed:', err.message);
+  }
+  try {
+    postWorkoutCount = await seedPostWorkoutReminders(env, customers, ist, today);
+  } catch (err) {
+    console.error('seedPostWorkoutReminders failed:', err.message);
   }
   try {
     const fired = await scanAndFireReminders(env, customers, global, ist, today);
@@ -575,8 +581,65 @@ async function runCron(env) {
     console.error('scanAndFireReminders failed:', err.message);
   }
 
-  await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso, remindersSeeded: seededCount, remindersFired: firedCount, firedDetail });
-  return { processed, acted, skipped, now: ist.iso, remindersSeeded: seededCount, remindersFired: firedCount };
+  await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso, remindersSeeded: seededCount, postWorkoutSeeded: postWorkoutCount, remindersFired: firedCount, firedDetail });
+  return { processed, acted, skipped, now: ist.iso, remindersSeeded: seededCount, postWorkoutSeeded: postWorkoutCount, remindersFired: firedCount };
+}
+
+async function seedPostWorkoutReminders(env, customers, ist, today) {
+  let count = 0;
+  let workout = null;
+  for (const [phoneKey, data] of Object.entries(customers)) {
+    const config = data?.config;
+    if (!config) continue;
+    if (config.paused) continue;
+    if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) continue;
+    if (config.lastPostWorkoutDate === today) continue;
+
+    if (!workout) {
+      try { workout = await fetchWorkout(env); }
+      catch { return count; }
+    }
+    const user = findUserInWorkout(workout, phoneKey);
+    if (!user) continue;
+
+    const todayActivity = getDailyActivityForDate(workout, user.uid, today);
+    if (!todayActivity || !todayActivity.lastExerciseTs) continue;
+
+    const ageMs = Date.now() - todayActivity.lastExerciseTs;
+    if (ageMs < 0) continue;
+    if (ageMs > 90 * 60 * 1000) continue;
+
+    const fireAt = Date.now() + 10 * 60 * 1000;
+    const exerciseCount = todayActivity.exerciseCount || 0;
+    const mins = Math.round((todayActivity.totalDuration || 0) / 60);
+
+    await fbPush(`customers/${phoneKey}/scheduledReminders`, {
+      ts: Date.now(),
+      fireAt,
+      status: 'pending',
+      source: 'post-workout',
+      reason: `Customer just completed a workout (${exerciseCount} exercises, ${mins} min, finished ~${Math.floor(ageMs / 60000)} min ago). Acknowledge it specifically — reference the session size or duration if it stands out; reference the streak if continuing one. Keep it warm and brief.`,
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastPostWorkoutDate: today });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(),
+      direction: 'system',
+      source: 'reminder',
+      action: 'post-workout-scheduled',
+      message: `${exerciseCount} exercises, ${mins} min — scheduled ack in 10 min`,
+    });
+    count++;
+  }
+  return count;
+}
+
+function getDailyActivityForDate(workout, uid, dateStr) {
+  const months = workout?.userMonthlySummaries?.[uid] || [];
+  for (const m of months) {
+    const day = m?.dailyActivity?.[dateStr];
+    if (day) return day;
+  }
+  return null;
 }
 
 async function scanAndFireReminders(env, customers, global, ist, today) {

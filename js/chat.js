@@ -444,6 +444,7 @@ function shortReason(r) {
     'end-of-week-gym': 'end-of-week gym nudge',
     'streak-saver': 'streak restart nudge',
     'comeback': 'comeback nudge after silence',
+    'post-workout': 'post-workout acknowledgment',
     'manual': 'your manual reminder',
   };
   const base = map[r.source] || r.source || 'scheduled reminder';
