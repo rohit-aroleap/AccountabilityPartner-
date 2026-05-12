@@ -46,8 +46,13 @@ html, body {
   padding: 14px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
   border-bottom: 1px solid var(--border);
+}
+
+.sidebar-header .sidebar-title {
+  flex: 1;
+  min-width: 0;
 }
 
 .sidebar-title {

@@ -1,4 +1,4 @@
-import { loadSettings, parseCustomerPhones } from './storage.js';
+import { loadSettings, parseCustomerPhones, getCustomerName, removeCustomer } from './storage.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
 import { openChatFor, closeChat } from './chat.js';
 
@@ -44,14 +44,17 @@ export async function refresh() {
 }
 
 function buildRow(idx, phone) {
+  const customName = getCustomerName(phone);
   const user = idx.byPhone.get(normalizePhone(phone));
-  if (!user) return { phone, found: false };
+  if (!user) {
+    return { phone, found: false, name: customName || '' };
+  }
   const recent = getRecentDailyActivity(idx, user.uid, 1);
   return {
     phone,
     found: true,
     uid: user.uid,
-    name: user.name || phone,
+    name: customName || user.name || phone,
     habitScore: user.habitScore,
     tierLabel: user.tierLabel,
     segment: user.segment,
@@ -79,12 +82,17 @@ function renderList(rows) {
 
 function rowHtml(c) {
   if (!c.found) {
+    const displayName = c.name || c.phone;
+    const initial = (c.name || '?').trim().charAt(0).toUpperCase() || '?';
+    const avatarCls = c.name ? 'avatar' : 'avatar avatar-missing';
     return `
       <div class="cust-row" data-phone="${escapeAttr(c.phone)}">
-        <div class="avatar avatar-missing">?</div>
+        <div class="${avatarCls}">${escapeHtml(initial)}</div>
         <div class="cust-body">
-          <div class="cust-top"><span class="cust-name">${escapeHtml(c.phone)}</span></div>
-          <div class="cust-sub"><span class="cust-segment">No workout history yet</span></div>
+          <div class="cust-top">
+            <span class="cust-name">${escapeHtml(displayName)}</span>
+          </div>
+          <div class="cust-sub"><span class="cust-segment">${escapeHtml(c.name ? c.phone + ' · no workout history yet' : 'No workout history yet')}</span></div>
         </div>
       </div>
     `;
