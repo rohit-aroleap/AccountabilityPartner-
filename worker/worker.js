@@ -419,6 +419,10 @@ async function processInboundReply(env, payload) {
   if (customerType === 'gym' && text) {
     extractAndLogWorkout(env, phoneKey, text, ist).catch(err => console.error('extract failed:', err.message));
   }
+  // For both types, extract future-intent reminders from the inbound
+  if (text) {
+    extractAndScheduleReminders(env, phoneKey, text, config, ist).catch(err => console.error('reminder extract failed:', err.message));
+  }
 
   if (config.autoCoachMode === 'auto-send') {
     await sendViaPeriskope(env, chatId, draft);
@@ -524,8 +528,240 @@ async function runCron(env) {
     }
   }
 
-  await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso });
-  return { processed, acted, skipped, now: ist.iso };
+  // After morning check-ins, seed automatic reminders and fire any due ones
+  let seededCount = 0;
+  let firedCount = 0;
+  let firedDetail = [];
+  try {
+    seededCount = await seedAutomaticReminders(env, customers, ist, today);
+  } catch (err) {
+    console.error('seedAutomaticReminders failed:', err.message);
+  }
+  try {
+    const fired = await scanAndFireReminders(env, customers, global, ist, today);
+    firedCount = fired.length;
+    firedDetail = fired;
+  } catch (err) {
+    console.error('scanAndFireReminders failed:', err.message);
+  }
+
+  await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso, remindersSeeded: seededCount, remindersFired: firedCount, firedDetail });
+  return { processed, acted, skipped, now: ist.iso, remindersSeeded: seededCount, remindersFired: firedCount };
+}
+
+async function scanAndFireReminders(env, customers, global, ist, today) {
+  const now = Date.now();
+  const fired = [];
+  for (const [phoneKey, data] of Object.entries(customers)) {
+    const config = data?.config;
+    if (!config) continue;
+    if (config.paused) continue;
+    if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) continue;
+    const reminders = data?.scheduledReminders || {};
+    for (const [rid, rem] of Object.entries(reminders)) {
+      if (!rem || rem.status !== 'pending') continue;
+      if (!rem.fireAt || rem.fireAt > now) continue;
+      if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= global.safety.maxOutboundPerDay) continue;
+      if (inQuietHours(ist.hm, global.safety)) continue;
+
+      // No-show check: if customer already reported workout since the reminder was created, cancel
+      if (rem.source === 'stated-intent-no-show') {
+        const log = await fetchWorkoutLog(phoneKey, 10);
+        const since = log.filter(w => (w.ts || 0) > (rem.ts || 0));
+        if (since.length > 0) {
+          await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, { status: 'cancelled', cancelledReason: 'workout-reported-after-creation' });
+          continue;
+        }
+      }
+
+      try {
+        await fireScheduledReminder(env, phoneKey, rid, rem, config, global, ist, today);
+        fired.push({ phone: phoneKey, source: rem.source });
+      } catch (err) {
+        await fbPush(`customers/${phoneKey}/activity`, {
+          ts: Date.now(), direction: 'system', source: 'reminder', action: 'reminder-failed',
+          error: err.message, reminderSource: rem.source,
+        });
+      }
+    }
+  }
+  return fired;
+}
+
+async function fireScheduledReminder(env, phoneKey, rid, rem, config, global, ist, today) {
+  const chatId = `${phoneKey}@c.us`;
+  let workout = null;
+  try { workout = await fetchWorkout(env); } catch {}
+  const user = workout ? findUserInWorkout(workout, phoneKey) : null;
+  const customerType = resolveCustomerType(config, user);
+
+  let messages = [];
+  try {
+    const resp = await fetchPeriskopeMessages(env, chatId, 50);
+    messages = (resp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+  } catch {}
+  messages = filterByConversationStart(messages, config?.conversationStartTs);
+
+  let basePrompt;
+  if (customerType === 'gym') {
+    const workoutLog = await fetchWorkoutLog(phoneKey, 20);
+    basePrompt = buildGymPrompt({ phone: phoneKey, user, config, messages, istNow: ist, workoutLog, mode: 'reminder' });
+  } else {
+    basePrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
+  }
+
+  const reminderTail = [
+    '',
+    '— SCHEDULED REMINDER CONTEXT —',
+    `This is a scheduled reminder, not a routine check-in.`,
+    `Source: ${rem.source || 'manual'}`,
+    `Reason: ${rem.reason || 'follow up'}`,
+    ``,
+    `Draft the message so it naturally references the reason. Do NOT mention that this was scheduled or that you set a reminder — the customer should just see a normal, well-timed message from you.`,
+  ].join('\n');
+  const userPrompt = basePrompt + '\n' + reminderTail;
+  const systemPrompt = customerType === 'gym'
+    ? (global.prompts?.gym || SYSTEM_GYM_COACH)
+    : (global.prompts?.coach || SYSTEM_COACH);
+
+  const draft = await callAnthropic(env, systemPrompt, userPrompt);
+  if (!draft) throw new Error('Empty draft for reminder');
+
+  if (config.autoCoachMode === 'auto-send') {
+    await sendViaPeriskope(env, chatId, draft);
+    await fbPatch(`customers/${phoneKey}/config`, {
+      lastOutboundAt: Date.now(),
+      outboundCountDate: today,
+      outboundCountToday: nextOutboundCount(config, today),
+    });
+    await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, {
+      status: 'sent', sentAt: Date.now(), sentMessage: draft,
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'outbound', source: 'reminder',
+      action: 'reminder-sent', message: draft, reminderSource: rem.source, reason: rem.reason,
+    });
+  } else {
+    await fbPut(`customers/${phoneKey}/pendingDraft`, {
+      ts: Date.now(), message: draft, source: 'reminder',
+      reason: `Scheduled reminder: ${rem.reason || rem.source}`,
+    });
+    await fbPatch(`customers/${phoneKey}/scheduledReminders/${rid}`, {
+      status: 'sent', sentAt: Date.now(), sentMessage: draft,
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'reminder',
+      action: 'reminder-drafted', message: draft, reminderSource: rem.source, reason: rem.reason,
+    });
+  }
+}
+
+async function seedAutomaticReminders(env, customers, ist, today) {
+  let count = 0;
+  let workout = null;
+  for (const [phoneKey, data] of Object.entries(customers)) {
+    const config = data?.config;
+    if (!config) continue;
+    if (config.paused) continue;
+    if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) continue;
+    if (data.lastSeedDate === today) continue;
+
+    if (!workout) { try { workout = await fetchWorkout(env); } catch {} }
+    const user = workout ? findUserInWorkout(workout, phoneKey) : null;
+    const customerType = resolveCustomerType(config, user);
+
+    const seeded = [];
+
+    // 1. End-of-week gym check: Sunday between 17:00 and 18:00 IST
+    if (customerType === 'gym' && ist.dayName === 'Sunday' && ist.hm >= '17:00' && ist.hm < '18:00') {
+      const log = await fetchWorkoutLog(phoneKey, 30);
+      const mondayStr = getMondayStr(ist);
+      const thisWeek = log.filter(w => (w.date || '') >= mondayStr);
+      const goal = parseInt(config.weeklyGoal, 10) || 3;
+      if (thisWeek.length < goal && !await hasPendingReminderOfSource(data, 'end-of-week-gym', today)) {
+        const fireAt = combineISTDateTime(ist.iso.slice(0, 10), '18:30');
+        await fbPush(`customers/${phoneKey}/scheduledReminders`, {
+          ts: Date.now(), fireAt, status: 'pending',
+          source: 'end-of-week-gym',
+          reason: `Customer is at ${thisWeek.length}/${goal} workouts this week. Nudge to close the gap before Sunday ends.`,
+        });
+        seeded.push('end-of-week-gym');
+      }
+    }
+
+    // 2. Streak saver: Ferra customer whose 7+ day streak just broke
+    if (customerType === 'ferra' && user?.streak) {
+      const s = user.streak;
+      if (!s.active && s.days >= 7 && !await hasPendingReminderOfSource(data, 'streak-saver', today)) {
+        const fireAt = combineISTDateTime(ist.iso.slice(0, 10), '10:00');
+        if (fireAt > Date.now()) {
+          await fbPush(`customers/${phoneKey}/scheduledReminders`, {
+            ts: Date.now(), fireAt, status: 'pending',
+            source: 'streak-saver',
+            reason: `Their ${s.days}-day streak just broke. Encourage a restart without making them feel bad.`,
+          });
+          seeded.push('streak-saver');
+        }
+      }
+    }
+
+    // 3. Comeback: silent 5-10 days
+    if (user && typeof user.daysSinceLastSession === 'number'
+        && user.daysSinceLastSession >= 5 && user.daysSinceLastSession <= 10
+        && !await hasPendingReminderOfSource(data, 'comeback', today)) {
+      const fireAt = combineISTDateTime(nextDayISO(ist.iso.slice(0, 10)), config.sendTimeIST || '08:00');
+      await fbPush(`customers/${phoneKey}/scheduledReminders`, {
+        ts: Date.now(), fireAt, status: 'pending',
+        source: 'comeback',
+        reason: `Customer hasn't trained in ${user.daysSinceLastSession} days. Reach out warmly to bring them back.`,
+      });
+      seeded.push('comeback');
+    }
+
+    if (seeded.length > 0) {
+      count += seeded.length;
+      await fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(), direction: 'system', source: 'reminder',
+        action: 'reminders-seeded', message: seeded.join(', '),
+      });
+    }
+    await fbPatch(`customers/${phoneKey}`, { lastSeedDate: today });
+  }
+  return count;
+}
+
+async function hasPendingReminderOfSource(customerData, source, today) {
+  const reminders = customerData?.scheduledReminders || {};
+  for (const [, r] of Object.entries(reminders)) {
+    if (r?.status === 'pending' && r.source === source) {
+      // also confirm it's for "today" — same calendar date as the today arg
+      const d = new Date(r.fireAt || r.ts || 0);
+      const istMs = d.getTime() + 5.5 * 60 * 60000;
+      const dStr = new Date(istMs).toISOString().slice(0, 10);
+      if (dStr === today) return true;
+    }
+  }
+  return false;
+}
+
+function getMondayStr(ist) {
+  const d = new Date(ist.iso.slice(0, 10) + 'T00:00:00Z');
+  const day = d.getUTCDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  const monday = new Date(d.getTime() + diff * 86400000);
+  return monday.toISOString().slice(0, 10);
+}
+
+function combineISTDateTime(dateStr, hmStr) {
+  // dateStr: YYYY-MM-DD, hmStr: HH:MM, both in IST. Return ms epoch.
+  const utcMs = Date.parse(`${dateStr}T${hmStr}:00.000Z`);
+  return utcMs - 5.5 * 60 * 60000;
+}
+
+function nextDayISO(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 async function processCustomer(env, phoneKey, config, workout, ist, today, global) {
@@ -893,6 +1129,81 @@ Examples:
     source: 'webhook',
     action: 'workout-auto-logged',
     message: `${parsed.type}: ${parsed.details || ''}`,
+  });
+}
+
+async function extractAndScheduleReminders(env, phoneKey, messageBody, config, ist) {
+  const todayISO = ist.iso.slice(0, 10);
+  const sendTime = config?.sendTimeIST || '08:00';
+  const nowIST = `${todayISO}T${ist.hm}:00+05:30`;
+
+  const prompt = `Analyze this WhatsApp message from a customer. Does it state a SPECIFIC future workout intent OR explicitly ask for a reminder at a specific time?
+
+Today: ${todayISO} (${ist.dayName}). Current time: ${ist.hm} IST. Customer's morning check-in is at ${sendTime} IST.
+Now: ${nowIST}
+
+Message: "${messageBody}"
+
+If YES, output a JSON with up to 2 reminders:
+- a "followup" at the stated time (to ask how it's going)
+- optionally a "no-show-check" 2 hours after the stated time (to verify they did it)
+
+Be CONSERVATIVE — skip vague phrases ("maybe later", "soon", "we'll see", "I'll try").
+
+Output ONLY JSON, no preamble:
+{ "reminders": [ { "fireAt": "<ISO 8601 with +05:30>", "reason": "<short>", "type": "followup" | "no-show-check" } ] }
+
+Examples:
+- "I'll workout at 6pm" → followup at today 18:00 + no-show-check at today 20:00
+- "Remind me tomorrow morning" → followup at tomorrow ${sendTime}
+- "Doing it Saturday for sure" → followup at the next Saturday at ${sendTime}
+- "Will hit the gym after work, around 8" → followup at today 20:00 + no-show-check at today 22:00
+- "Did legs today" → { "reminders": [] }
+- "Maybe tomorrow" → { "reminders": [] }
+- "Going gym now" → { "reminders": [{ "fireAt": "<now + 90 min>", "reason": "check on workout after they said they're going now", "type": "no-show-check" }] }`;
+
+  let text;
+  try {
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 500);
+  } catch (err) {
+    console.error('reminder extract LLM call failed:', err.message);
+    return;
+  }
+  if (!text) return;
+
+  let parsed;
+  try {
+    const cleaned = text.trim().replace(/^```json\s*|\s*```$/g, '').trim();
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed?.reminders) || parsed.reminders.length === 0) return;
+
+  const now = Date.now();
+  for (const r of parsed.reminders) {
+    if (!r?.fireAt || !r.reason) continue;
+    const fireMs = Date.parse(r.fireAt);
+    if (Number.isNaN(fireMs) || fireMs <= now) continue;
+    if (fireMs > now + 14 * 24 * 60 * 60 * 1000) continue; // cap at 14 days out
+    const sourceType = r.type === 'no-show-check' ? 'stated-intent-no-show' : 'stated-intent-followup';
+    try {
+      await fbPush(`customers/${phoneKey}/scheduledReminders`, {
+        ts: Date.now(),
+        fireAt: fireMs,
+        status: 'pending',
+        source: sourceType,
+        reason: String(r.reason).slice(0, 240),
+        extractedFrom: messageBody.slice(0, 200),
+      });
+    } catch (err) {
+      console.error('failed to push reminder:', err.message);
+    }
+  }
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'system', source: 'reminder',
+    action: 'reminders-extracted',
+    message: `${parsed.reminders.length} reminder(s) extracted from inbound`,
   });
 }
 

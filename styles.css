@@ -344,6 +344,7 @@ form input:focus, form select:focus, form textarea:focus {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .chat-header {
@@ -843,6 +844,133 @@ input.toggle {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+
+.cs-reminders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rem-row {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+
+.rem-row.rem-sent { opacity: 0.65; }
+.rem-row.rem-cancelled { opacity: 0.5; }
+.rem-row.rem-pending { border-color: var(--accent); }
+
+.rem-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.rem-time {
+  color: var(--text);
+  font-weight: 500;
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rem-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rem-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.rem-cancel:hover { color: var(--danger); border-color: var(--danger); }
+
+.rem-reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rem-msg {
+  color: var(--text);
+  font-size: 12px;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.remind-popover {
+  position: absolute;
+  bottom: 78px;
+  right: 18px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  z-index: 50;
+  width: 300px;
+}
+
+.remind-popover[hidden] { display: none; }
+
+.rp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.rp-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rp-preset {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.rp-preset:hover { background: var(--border); }
+.rp-preset.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+.rp-custom input {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.rp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.rp-actions .btn { padding: 6px 14px; font-size: 12px; }
 
 .cs-empty {
   font-size: 12.5px;

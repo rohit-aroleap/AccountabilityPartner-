@@ -2,7 +2,7 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder } from './firebase-db.js';
 import { ref, get, query, limitToLast } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, ROOT_PATH } from './firebase-init.js';
 
@@ -131,6 +131,7 @@ function renderShell(c) {
         <div class="draft-btns">
           <button type="button" class="draft-btn coach" id="chat-draft-coach" title="Coach: workout accountability (Ctrl/Cmd+J)">&#x1F4AA;</button>
           <button type="button" class="draft-btn" id="chat-draft-reply" title="Reply: natural continuation">&#x1F4AC;</button>
+          <button type="button" class="draft-btn" id="chat-remind-later" title="Schedule a reminder for later">&#x23F0;</button>
         </div>
         <textarea
           id="chat-input"
@@ -140,6 +141,27 @@ function renderShell(c) {
         ></textarea>
         <button type="submit" class="btn" id="chat-send">Send</button>
       </form>
+      <div class="remind-popover" id="remind-popover" hidden>
+        <div class="rp-title">Schedule a reminder</div>
+        <div class="rp-presets">
+          <button type="button" class="rp-preset" data-preset="3h">In 3 hours</button>
+          <button type="button" class="rp-preset" data-preset="evening">This evening (7 PM)</button>
+          <button type="button" class="rp-preset" data-preset="tomorrow-am">Tomorrow morning (8 AM)</button>
+          <button type="button" class="rp-preset" data-preset="tomorrow-pm">Tomorrow evening (7 PM)</button>
+          <button type="button" class="rp-preset" data-preset="custom">Custom…</button>
+        </div>
+        <div class="rp-custom" id="rp-custom" hidden>
+          <input type="datetime-local" id="rp-when" />
+        </div>
+        <div class="field" style="margin-top:8px;">
+          <label for="rp-reason">Reason (optional)</label>
+          <input type="text" id="rp-reason" placeholder="e.g., check if they trained" />
+        </div>
+        <div class="rp-actions">
+          <button type="button" class="btn-ghost btn" id="rp-cancel">Cancel</button>
+          <button type="button" class="btn" id="rp-save">Schedule</button>
+        </div>
+      </div>
     </div>
   `;
   document.getElementById('chat-refresh').addEventListener('click', () => refreshMessages({ scroll: true }));
@@ -147,6 +169,12 @@ function renderShell(c) {
   document.getElementById('chat-composer').addEventListener('submit', onSend);
   document.getElementById('chat-draft-coach').addEventListener('click', () => onDraft('coach'));
   document.getElementById('chat-draft-reply').addEventListener('click', () => onDraft('reply'));
+  document.getElementById('chat-remind-later').addEventListener('click', openRemindPopover);
+  document.getElementById('rp-cancel').addEventListener('click', closeRemindPopover);
+  document.getElementById('rp-save').addEventListener('click', saveReminder);
+  document.querySelectorAll('.rp-preset').forEach(btn => {
+    btn.addEventListener('click', () => selectPreset(btn.dataset.preset));
+  });
   const input = document.getElementById('chat-input');
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {
@@ -240,6 +268,65 @@ async function refreshMessages({ scroll = false } = {}) {
     if (scroll) container.scrollTop = container.scrollHeight;
   } catch (err) {
     container.innerHTML = `<div class="chat-status error">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+let selectedPreset = null;
+
+function openRemindPopover() {
+  selectedPreset = null;
+  const pop = document.getElementById('remind-popover');
+  document.getElementById('rp-custom').hidden = true;
+  document.getElementById('rp-reason').value = '';
+  document.querySelectorAll('.rp-preset').forEach(b => b.classList.remove('active'));
+  pop.hidden = false;
+}
+
+function closeRemindPopover() {
+  document.getElementById('remind-popover').hidden = true;
+}
+
+function selectPreset(preset) {
+  selectedPreset = preset;
+  document.querySelectorAll('.rp-preset').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === preset);
+  });
+  document.getElementById('rp-custom').hidden = preset !== 'custom';
+}
+
+async function saveReminder() {
+  if (!activeCustomer) return;
+  const reason = document.getElementById('rp-reason').value.trim() || 'manual reminder';
+  let fireAt;
+  const now = new Date();
+  if (selectedPreset === '3h') {
+    fireAt = now.getTime() + 3 * 60 * 60 * 1000;
+  } else if (selectedPreset === 'evening') {
+    const d = new Date(now); d.setHours(19, 0, 0, 0);
+    if (d <= now) d.setDate(d.getDate() + 1);
+    fireAt = d.getTime();
+  } else if (selectedPreset === 'tomorrow-am') {
+    const d = new Date(now); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0);
+    fireAt = d.getTime();
+  } else if (selectedPreset === 'tomorrow-pm') {
+    const d = new Date(now); d.setDate(d.getDate() + 1); d.setHours(19, 0, 0, 0);
+    fireAt = d.getTime();
+  } else if (selectedPreset === 'custom') {
+    const v = document.getElementById('rp-when').value;
+    if (!v) { alert('Pick a date and time.'); return; }
+    fireAt = new Date(v).getTime();
+    if (fireAt <= now.getTime()) { alert('Pick a time in the future.'); return; }
+  } else {
+    alert('Pick a preset.');
+    return;
+  }
+  try {
+    await addScheduledReminder(activeCustomer.phone, {
+      fireAt, reason, source: 'manual',
+    });
+    closeRemindPopover();
+  } catch (err) {
+    alert(`Schedule failed: ${err.message}`);
   }
 }
 

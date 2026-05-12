@@ -68,6 +68,29 @@ export function subscribeAutomationFeed(n, cb) {
   return () => off(q, 'value', handler);
 }
 
+export function subscribeScheduledReminders(phone, n, cb) {
+  const r = customerRef(phone, '/scheduledReminders');
+  const q = query(r, limitToLast(n));
+  const handler = (snap) => {
+    const out = [];
+    snap.forEach(child => { out.push({ id: child.key, ...child.val() }); });
+    cb(out.reverse());
+  };
+  onValue(q, handler);
+  return () => off(q, 'value', handler);
+}
+
+export async function addScheduledReminder(phone, entry) {
+  const r = push(customerRef(phone, '/scheduledReminders'));
+  await set(r, { ts: Date.now(), status: 'pending', ...entry });
+  return r.key;
+}
+
+export async function cancelScheduledReminder(phone, id) {
+  const r = customerRef(phone, `/scheduledReminders/${id}`);
+  await update(r, { status: 'cancelled', cancelledAt: Date.now() });
+}
+
 export function subscribeWorkoutLog(phone, n, cb) {
   const r = customerRef(phone, '/workoutLog');
   const q = query(r, limitToLast(n));

@@ -1,4 +1,4 @@
-import { readConfig, writeConfig, subscribeActivity, subscribeWorkoutLog } from './firebase-db.js';
+import { readConfig, writeConfig, subscribeActivity, subscribeWorkoutLog, subscribeScheduledReminders, cancelScheduledReminder } from './firebase-db.js';
 import { SAFETY, checkOutboundSafety } from './safety.js';
 import { isPhoneInFerraExport } from './workout.js';
 
@@ -17,6 +17,7 @@ let currentPhone = null;
 let currentConfig = null;
 let activityUnsub = null;
 let workoutLogUnsub = null;
+let remindersUnsub = null;
 let autoDetectedType = '';
 const listeners = new Set();
 
@@ -91,6 +92,11 @@ export function initCustomerSettings() {
         </div>
 
         <div class="cs-section">
+          <h3>Scheduled reminders <span class="cs-hint">(AI-extracted, auto-seeded, or manual)</span></h3>
+          <div id="cs-reminders" class="cs-reminders">Loading…</div>
+        </div>
+
+        <div class="cs-section">
           <h3>Recent activity</h3>
           <div id="cs-activity" class="cs-activity">Loading…</div>
         </div>
@@ -123,8 +129,10 @@ export async function openCustomerSettings(customer) {
   refreshTypeUI();
   if (activityUnsub) activityUnsub();
   if (workoutLogUnsub) workoutLogUnsub();
+  if (remindersUnsub) remindersUnsub();
   activityUnsub = subscribeActivity(customer.phone, 20, renderActivity);
   workoutLogUnsub = subscribeWorkoutLog(customer.phone, 20, renderWorkoutLog);
+  remindersUnsub = subscribeScheduledReminders(customer.phone, 20, renderReminders);
   modalEl.classList.add('open');
 }
 
@@ -132,6 +140,7 @@ function closeModal() {
   modalEl.classList.remove('open');
   if (activityUnsub) { activityUnsub(); activityUnsub = null; }
   if (workoutLogUnsub) { workoutLogUnsub(); workoutLogUnsub = null; }
+  if (remindersUnsub) { remindersUnsub(); remindersUnsub = null; }
   document.getElementById('cs-save-status').textContent = '';
 }
 
@@ -243,6 +252,45 @@ function renderActivity(events) {
       </div>
     `;
   }).join('');
+}
+
+function renderReminders(entries) {
+  const el = document.getElementById('cs-reminders');
+  if (!entries || !entries.length) {
+    el.innerHTML = `<div class="cs-empty">No scheduled reminders. AI extracts them from chat ("remind me at 6") and the daily scan seeds streak/comeback/end-of-week ones.</div>`;
+    return;
+  }
+  el.innerHTML = entries.map(r => {
+    const fire = new Date(r.fireAt || r.ts);
+    const fireStr = fire.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const statusCls = r.status === 'pending' ? 'pending' : (r.status === 'sent' ? 'sent' : 'cancelled');
+    const source = r.source || 'manual';
+    const sentInfo = r.status === 'sent' && r.sentMessage
+      ? `<div class="rem-msg">${escapeHtml(truncate(r.sentMessage, 140))}</div>` : '';
+    const cancelBtn = r.status === 'pending'
+      ? `<button type="button" class="rem-cancel" data-rid="${escapeAttr(r.id)}">Cancel</button>` : '';
+    return `
+      <div class="rem-row rem-${statusCls}">
+        <div class="rem-top">
+          <span class="rem-time">${escapeHtml(fireStr)}</span>
+          <span class="rem-status">${escapeHtml(r.status || 'pending')} · ${escapeHtml(source)}</span>
+          ${cancelBtn}
+        </div>
+        <div class="rem-reason">${escapeHtml(r.reason || '')}</div>
+        ${sentInfo}
+      </div>
+    `;
+  }).join('');
+  el.querySelectorAll('.rem-cancel').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const rid = btn.dataset.rid;
+      try {
+        await cancelScheduledReminder(currentPhone, rid);
+      } catch (err) {
+        alert(`Cancel failed: ${err.message}`);
+      }
+    });
+  });
 }
 
 function renderWorkoutLog(entries) {
