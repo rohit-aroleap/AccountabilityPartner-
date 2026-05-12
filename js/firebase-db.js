@@ -55,3 +55,15 @@ export function subscribePendingDraft(phone, cb) {
 export async function clearPendingDraft(phone) {
   await remove(customerRef(phone, '/pendingDraft'));
 }
+
+export function subscribeAutomationFeed(n, cb) {
+  const r = ref(db, `${ROOT_PATH}/automation/feed`);
+  const q = query(r, limitToLast(n));
+  const handler = (snap) => {
+    const out = [];
+    snap.forEach(child => { out.push({ id: child.key, ...child.val() }); });
+    cb(out.reverse());
+  };
+  onValue(q, handler);
+  return () => off(q, 'value', handler);
+}

@@ -206,20 +206,36 @@ function periskopeConfig(env) {
 async function handlePeriskopeWebhook(request, env, corsHeaders) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
 
+  const t0 = Date.now();
   let payload;
   try { payload = await request.json(); }
-  catch { return json({ error: 'Invalid JSON' }, corsHeaders, 400); }
-
-  // Always respond 200 quickly so Periskope doesn't retry. Do the work in waitUntil-style flow.
-  // We process synchronously here because Workers will keep the connection until the response is sent.
-  // For now, sequential is fine — we cap work per webhook.
-  try {
-    const result = await processInboundReply(env, payload);
-    return json({ ok: true, result }, corsHeaders);
-  } catch (err) {
-    return json({ ok: false, error: err.message }, corsHeaders, 200);
-    // Returning 200 even on error so Periskope doesn't retry-storm us.
+  catch {
+    await logAutomation({ type: 'webhook', ts: t0, error: 'invalid-json' });
+    return json({ error: 'Invalid JSON' }, corsHeaders, 400);
   }
+
+  let result, errorMsg;
+  try {
+    result = await processInboundReply(env, payload);
+  } catch (err) {
+    errorMsg = err.message;
+    result = { error: err.message };
+  }
+
+  await logAutomation({
+    type: 'webhook',
+    ts: t0,
+    event: payload?.event,
+    chat_id: payload?.data?.chat_id,
+    from_me: payload?.data?.from_me === true,
+    message_id: payload?.data?.message_id,
+    body_preview: typeof payload?.data?.body === 'string' ? payload.data.body.slice(0, 120) : '',
+    message_type: payload?.data?.message_type,
+    result,
+  });
+
+  // Always 200 to avoid Periskope retry storms
+  return json({ ok: !errorMsg, result }, corsHeaders);
 }
 
 async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
@@ -392,7 +408,10 @@ function detectOptOutKeywords(text) {
 
 async function runCron(env) {
   const customers = await fbGet('customers');
-  if (!customers) return { processed: 0, acted: 0 };
+  if (!customers) {
+    await logAutomation({ type: 'cron', processed: 0, acted: 0, skipped: [], note: 'no-customers' });
+    return { processed: 0, acted: 0 };
+  }
 
   const now = new Date();
   const ist = istParts(now);
@@ -439,6 +458,7 @@ async function runCron(env) {
     }
   }
 
+  await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso });
   return { processed, acted, skipped, now: ist.iso };
 }
 
@@ -576,6 +596,14 @@ async function fbPush(path, value) {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
   });
   if (!r.ok) throw new Error(`Firebase POST ${path}: ${r.status}`);
+}
+
+async function logAutomation(event) {
+  try {
+    await fbPush('automation/feed', { ts: Date.now(), ...event });
+  } catch (err) {
+    console.error('logAutomation failed:', err.message);
+  }
 }
 
 // ============================================================
