@@ -32,7 +32,14 @@ const SAFETY = {
   maxOutboundPerDay: 3,
   minMinutesBetweenOutbound: 240,
   sendWindowMin: 15,
+  maxAutoTurnsPerSession: 4,
+  sessionIdleMinutes: 60,
 };
+
+const OPT_OUT_KEYWORDS = [
+  'stop messaging', 'stop texting', "don't message", "don't text", 'unsubscribe',
+  'leave me alone', 'mat karo', 'mat bhejo', 'band karo', 'stop', 'pause',
+];
 
 const SYSTEM_COACH = `You are Rohit Patel, founder of Ferra (a smart resistance-training machine). You run a personal WhatsApp accountability program for your customers. Every message you send moves them toward consistent training. This is not a generic chat — workouts are your mission.
 
@@ -74,6 +81,8 @@ export default {
       if (url.pathname === '/periskope/send') return handlePeriskopeSend(request, env, corsHeaders);
       if (url.pathname === '/periskope/messages') return handlePeriskopeMessages(request, env, corsHeaders);
       if (url.pathname === '/anthropic/messages') return handleAnthropic(request, env, corsHeaders);
+      if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, corsHeaders);
+      if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
       if (url.pathname === '/cron/run') {
         const result = await runCron(env);
         return json({ ok: true, ...result }, corsHeaders);
@@ -188,6 +197,193 @@ function periskopeConfig(env) {
   if (!env.PERISKOPE_API_KEY) return { error: 'PERISKOPE_API_KEY secret not set' };
   if (!env.PERISKOPE_PHONE) return { error: 'PERISKOPE_PHONE secret not set' };
   return { token: env.PERISKOPE_API_KEY, phone: env.PERISKOPE_PHONE };
+}
+
+// ============================================================
+// Webhook — inbound message auto-reply
+// ============================================================
+
+async function handlePeriskopeWebhook(request, env, corsHeaders) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
+
+  let payload;
+  try { payload = await request.json(); }
+  catch { return json({ error: 'Invalid JSON' }, corsHeaders, 400); }
+
+  // Always respond 200 quickly so Periskope doesn't retry. Do the work in waitUntil-style flow.
+  // We process synchronously here because Workers will keep the connection until the response is sent.
+  // For now, sequential is fine — we cap work per webhook.
+  try {
+    const result = await processInboundReply(env, payload);
+    return json({ ok: true, result }, corsHeaders);
+  } catch (err) {
+    return json({ ok: false, error: err.message }, corsHeaders, 200);
+    // Returning 200 even on error so Periskope doesn't retry-storm us.
+  }
+}
+
+async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  const cfg = periskopeConfig(env);
+  if (cfg.error) return json({ error: cfg.error }, corsHeaders, 500);
+
+  const selfOrigin = new URL(request.url).origin;
+  const hookUrl = `${selfOrigin}/periskope/webhook`;
+
+  const res = await fetch(`${PERISKOPE_BASE}/webhooks`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${cfg.token}`,
+      'x-phone': cfg.phone,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      hookUrl,
+      integrationName: 'message.created',
+      name: 'AccountabilityPartner',
+    }),
+  });
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+async function processInboundReply(env, payload) {
+  if (!payload || payload.event !== 'message.created') {
+    return { ignored: 'wrong-event', got: payload?.event };
+  }
+  const data = payload.data;
+  if (!data) return { ignored: 'no-data' };
+  if (data.from_me === true) return { ignored: 'outbound' };
+
+  const chatId = data.chat_id;
+  if (!chatId) return { ignored: 'no-chat-id' };
+  if (chatId.endsWith('@g.us')) return { ignored: 'group-chat' };
+
+  const phoneKey = chatId.replace(/@c\.us$/, '').replace(/[^\d]/g, '');
+  if (!phoneKey) return { ignored: 'no-phone' };
+
+  const config = await fbGet(`customers/${phoneKey}/config`);
+  if (!config) return { ignored: 'no-config-for-customer' };
+  if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) return { ignored: 'mode-off' };
+
+  if (data.message_id && data.message_id === config.lastInboundMessageId) {
+    return { ignored: 'duplicate' };
+  }
+
+  if (config.paused) {
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'inbound', source: 'webhook', action: 'received-while-paused',
+      message: data.body || '',
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
+    return { ignored: 'paused' };
+  }
+
+  const text = (data.body || '').trim();
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'inbound', source: 'webhook', action: 'received',
+    message: text || `[${data.message_type || 'media'}]`,
+  });
+
+  if (text && detectOptOutKeywords(text)) {
+    await fbPatch(`customers/${phoneKey}/config`, {
+      paused: true,
+      pausedReason: `Opt-out keyword detected: "${text.slice(0, 80)}"`,
+      lastInboundMessageId: data.message_id,
+      lastInboundAt: Date.now(),
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'webhook', action: 'auto-paused-opt-out',
+      message: text,
+    });
+    return { acted: 'auto-paused' };
+  }
+
+  const now = new Date();
+  const ist = istParts(now);
+  const today = ist.iso.slice(0, 10);
+
+  if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= SAFETY.maxOutboundPerDay) {
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-daily-cap',
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
+    return { ignored: 'daily-cap' };
+  }
+  if (inQuietHours(ist.hm)) {
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-quiet-hours',
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
+    return { ignored: 'quiet-hours' };
+  }
+
+  const lastInbound = config.lastInboundAt || 0;
+  const sessionIdleMs = SAFETY.sessionIdleMinutes * 60 * 1000;
+  let autoTurnCount = config.autoTurnCount ?? 0;
+  if (Date.now() - lastInbound > sessionIdleMs) autoTurnCount = 0;
+  if (autoTurnCount >= SAFETY.maxAutoTurnsPerSession) {
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-max-auto-turns',
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
+    return { ignored: 'max-auto-turns' };
+  }
+
+  const workout = await fetchWorkout(env);
+  const user = findUserInWorkout(workout, phoneKey);
+  const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
+  const messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
+
+  const userPrompt = buildReplyPrompt({
+    phone: phoneKey, user, raw: workout, messages, istNow: ist, latestInbound: text,
+  });
+  const draft = await callAnthropic(env, SYSTEM_COACH, userPrompt);
+  if (!draft) throw new Error('Empty draft from Anthropic');
+
+  if (config.autoCoachMode === 'auto-send') {
+    await sendViaPeriskope(env, chatId, draft);
+    await fbPatch(`customers/${phoneKey}/config`, {
+      lastOutboundAt: Date.now(),
+      outboundCountDate: today,
+      outboundCountToday: nextOutboundCount(config, today),
+      lastInboundAt: Date.now(),
+      lastInboundMessageId: data.message_id,
+      autoTurnCount: autoTurnCount + 1,
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'outbound', source: 'webhook', action: 'auto-replied',
+      message: draft,
+    });
+    return { acted: 'sent', autoTurnCount: autoTurnCount + 1 };
+  }
+
+  // draft-only
+  await fbPut(`customers/${phoneKey}/pendingDraft`, {
+    ts: Date.now(),
+    message: draft,
+    source: 'webhook',
+    reason: 'Reply to inbound message',
+  });
+  await fbPatch(`customers/${phoneKey}/config`, {
+    lastInboundAt: Date.now(),
+    lastInboundMessageId: data.message_id,
+  });
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'system', source: 'webhook', action: 'drafted-reply',
+    message: draft,
+  });
+  return { acted: 'drafted' };
+}
+
+function detectOptOutKeywords(text) {
+  if (!text) return false;
+  const t = String(text).toLowerCase().trim();
+  if (t.length > 80) return false;
+  return OPT_OUT_KEYWORDS.some(k => t === k || t.startsWith(k + ' ') || t.endsWith(' ' + k) || t.includes(' ' + k + ' '));
 }
 
 // ============================================================
@@ -456,6 +652,19 @@ function buildCronCheckinPrompt({ phone, user, raw, messages, istNow }) {
   lines.push('');
   lines.push('This is the morning accountability check-in. Lead with workouts. Be specific to their data. If they replied last, acknowledge that briefly, then pivot to training.');
   return lines.join('\n');
+}
+
+function buildReplyPrompt({ phone, user, raw, messages, istNow, latestInbound }) {
+  // Same context as cron check-in, but framed as "customer just messaged, draft my reply"
+  const base = buildCronCheckinPrompt({ phone, user, raw, messages, istNow });
+  const withoutFinalInstruction = base.split('\n').slice(0, -2).join('\n');
+  const tail = [
+    '',
+    `Customer just sent: "${(latestInbound || '').slice(0, 500)}"`,
+    '',
+    'Draft my reply. Acknowledge briefly if they raised something specific, then anchor on workouts. Keep it short and human.',
+  ].join('\n');
+  return withoutFinalInstruction + tail;
 }
 
 function formatMessageTs(ts) {

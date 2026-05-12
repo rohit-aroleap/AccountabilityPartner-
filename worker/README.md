@@ -9,6 +9,8 @@ Single-file proxy + scheduled coach engine. Everything lives in `worker.js`.
 - `POST /periskope/send` — `{ chat_id, message, reply_to? }`
 - `GET /periskope/messages?chat_id=<id>&limit=&offset=`
 - `POST /anthropic/messages` — `{ system, messages, model?, max_tokens? }`
+- `POST /periskope/webhook` — receives `message.created` events from Periskope; auto-replies or queues drafts
+- `POST /periskope/webhook-setup` — one-shot subscription registrar; tells Periskope to send `message.created` to this worker
 - `GET /cron/run` — manually trigger the cron handler (debugging)
 
 ## Scheduled trigger
@@ -46,6 +48,26 @@ wrangler deploy
 2. Replace the entire contents of `worker.js` with [worker/worker.js](https://github.com/rohit-aroleap/accountabilityPartner-/blob/main/worker/worker.js) → **Save and Deploy**
 3. Back → Settings → **Triggers** → Cron Triggers → **Add** → `*/15 * * * *` → Save
 4. Settings → **Variables** → add the four secrets above (Encrypted)
+
+## Webhook for inbound replies
+
+Once the worker is deployed, register the webhook with Periskope so inbound messages flow to `/periskope/webhook`. One-time:
+
+```
+curl -X POST https://accountability-partner.<your-subdomain>.workers.dev/periskope/webhook-setup
+```
+
+The worker calls Periskope's `POST /v1/webhooks` on your behalf using `PERISKOPE_API_KEY` and `PERISKOPE_PHONE` (already as secrets). Response is the Periskope API response — confirm you see a webhook id and `integrationName: "message.created"`.
+
+After that, every WhatsApp message a customer sends to your number reaches `/periskope/webhook`. The worker:
+
+1. Ignores group chats, outbound (`from_me === true`), and duplicate `message_id`.
+2. Looks up the customer config at `accountabilityPartner/v1/customers/<phoneDigits>/config`. No config or `autoCoachMode === 'off'` → ignored.
+3. Logs the inbound to the activity log.
+4. Detects opt-out keywords (`stop`, `pause`, `mat karo`, etc.) → auto-sets `paused: true` and exits.
+5. Runs safety guards: daily cap, quiet hours, max auto-turns per session (4 with 60-min idle reset).
+6. Fetches workout data + recent chat, generates a reply with Claude.
+7. `auto-send` → sends via Periskope + logs. `draft-only` → writes to `pendingDraft` (dashboard surfaces it).
 
 ## Manual cron test
 
