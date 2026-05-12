@@ -18,6 +18,48 @@ let webhookEventsByMessageId = new Map();
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
+  els.pane.addEventListener('click', onPaneClick);
+}
+
+function onPaneClick(e) {
+  const badge = e.target.closest('.ai-badge');
+  if (!badge) return;
+  const bubble = badge.closest('.bubble');
+  showAiBadgeDetails(bubble?.dataset.messageId);
+}
+
+function showAiBadgeDetails(messageId) {
+  if (!messageId) {
+    alert('No message id on this bubble.');
+    return;
+  }
+  const ev = webhookEventsByMessageId.get(messageId);
+  if (!ev) {
+    alert(
+      `No webhook event recorded for this message.\n\n` +
+      `Possible reasons:\n` +
+      `  • Periskope hasn't delivered the webhook yet (wait ~10s)\n` +
+      `  • The message was sent before the webhook was set up\n` +
+      `  • Webhook URL is misconfigured on Periskope's side`
+    );
+    return;
+  }
+  const lines = [
+    `Webhook delivered at ${new Date(ev.ts).toLocaleString()}`,
+    ``,
+    `event field: ${ev.event || '(missing)'}`,
+    `chat_id: ${ev.chat_id || ''}`,
+    `message_id: ${ev.message_id || ''}`,
+    `from_me: ${ev.from_me}`,
+    `message_type: ${ev.message_type || '(missing)'}`,
+    ``,
+    `Decision:`,
+    JSON.stringify(ev.result || {}, null, 2),
+    ``,
+    `Raw payload (first 2000 chars):`,
+    ev.raw || '(not captured — only logged from worker v1.015+)',
+  ];
+  alert(lines.join('\n'));
 }
 
 export async function openChatFor(customer) {

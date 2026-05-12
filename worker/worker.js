@@ -207,10 +207,13 @@ async function handlePeriskopeWebhook(request, env, corsHeaders) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
 
   const t0 = Date.now();
+  const rawBody = await request.text();
+  const rawPreview = rawBody.slice(0, 2000);
+
   let payload;
-  try { payload = await request.json(); }
+  try { payload = JSON.parse(rawBody); }
   catch {
-    await logAutomation({ type: 'webhook', ts: t0, error: 'invalid-json' });
+    await logAutomation({ type: 'webhook', ts: t0, error: 'invalid-json', raw: rawPreview });
     return json({ error: 'Invalid JSON' }, corsHeaders, 400);
   }
 
@@ -225,16 +228,16 @@ async function handlePeriskopeWebhook(request, env, corsHeaders) {
   await logAutomation({
     type: 'webhook',
     ts: t0,
-    event: payload?.event,
+    event: payload?.event || payload?.eventType || payload?.type || null,
     chat_id: payload?.data?.chat_id,
     from_me: payload?.data?.from_me === true,
     message_id: payload?.data?.message_id,
     body_preview: typeof payload?.data?.body === 'string' ? payload.data.body.slice(0, 120) : '',
     message_type: payload?.data?.message_type,
+    raw: rawPreview,
     result,
   });
 
-  // Always 200 to avoid Periskope retry storms
   return json({ ok: !errorMsg, result }, corsHeaders);
 }
 
@@ -267,15 +270,23 @@ async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
 }
 
 async function processInboundReply(env, payload) {
-  if (!payload || payload.event !== 'message.created') {
-    return { ignored: 'wrong-event', got: payload?.event };
+  if (!payload) return { ignored: 'no-payload' };
+  const data = payload.data || payload;
+  if (!data || typeof data !== 'object') return { ignored: 'no-data' };
+
+  // Event-name check is now informational — Periskope sometimes omits the event field.
+  // Real filtering is by message shape + dedupe via lastInboundMessageId.
+  const eventName = payload.event || payload.eventType || payload.type;
+  if (eventName && !['message.created', 'message.create', 'message-created', 'created'].includes(eventName)) {
+    return { ignored: 'wrong-event', got: eventName };
   }
-  const data = payload.data;
-  if (!data) return { ignored: 'no-data' };
+
+  if (!data.message_id || !data.chat_id) {
+    return { ignored: 'no-message-shape', got: eventName || '(missing)', keys: Object.keys(data).slice(0, 10) };
+  }
   if (data.from_me === true) return { ignored: 'outbound' };
 
   const chatId = data.chat_id;
-  if (!chatId) return { ignored: 'no-chat-id' };
   if (chatId.endsWith('@g.us')) return { ignored: 'group-chat' };
 
   const phoneKey = chatId.replace(/@c\.us$/, '').replace(/[^\d]/g, '');

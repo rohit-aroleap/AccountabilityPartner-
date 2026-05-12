@@ -443,8 +443,11 @@ form input:focus, form select:focus, form textarea:focus {
   display: inline-block;
   font-weight: 500;
   letter-spacing: 0.2px;
-  cursor: default;
+  cursor: pointer;
+  user-select: none;
 }
+
+.ai-badge:hover { filter: brightness(1.2); }
 
 .ai-badge.ok { background: rgba(0, 168, 132, 0.18); color: var(--accent); }
 .ai-badge.err { background: rgba(241, 92, 109, 0.18); color: var(--danger); }
