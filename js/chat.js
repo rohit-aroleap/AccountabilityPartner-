@@ -2,7 +2,8 @@ import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder, subscribeHoldQueueForChat, markHoldHeld, logAiRating } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder, subscribeHoldQueueForChat, markHoldHeld, logAiRating, subscribeConfig, subscribeScheduledReminders } from './firebase-db.js';
+import { getCachedGlobalConfig, subscribeGlobalConfig } from './global-config.js';
 import { ref, get, query, limitToLast } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, ROOT_PATH } from './firebase-init.js';
 
@@ -29,9 +30,14 @@ let pollTimer = null;
 let pendingDraftUnsub = null;
 let webhookEventsUnsub = null;
 let holdQueueUnsub = null;
+let configUnsub = null;
+let remindersUnsub = null;
+let nextUpTimer = null;
 let holdCountdownTimer = null;
 let activePendingDraft = null;
 let activeHold = null;
+let activeCustomerConfig = null;
+let activeReminders = [];
 let webhookEventsByMessageId = new Map();
 
 export function initChat() {
@@ -126,12 +132,17 @@ export async function openChatFor(customer) {
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
   if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
+  if (configUnsub) { configUnsub(); configUnsub = null; }
+  if (remindersUnsub) { remindersUnsub(); remindersUnsub = null; }
   if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
+  if (nextUpTimer) { clearInterval(nextUpTimer); nextUpTimer = null; }
   activeCustomer = customer;
   activeChatId = phoneToChatId(customer.phone);
   currentMessages = [];
   activePendingDraft = null;
   activeHold = null;
+  activeCustomerConfig = null;
+  activeReminders = [];
   webhookEventsByMessageId = new Map();
   renderShell(customer);
   await refreshMessages({ scroll: true });
@@ -139,6 +150,9 @@ export async function openChatFor(customer) {
   pendingDraftUnsub = subscribePendingDraft(customer.phone, onPendingDraftChange);
   webhookEventsUnsub = subscribeWebhookEventsForChat(activeChatId, 50, onWebhookEventsChange);
   holdQueueUnsub = subscribeHoldQueueForChat(customer.phone, onHoldQueueChange);
+  configUnsub = subscribeConfig(customer.phone, onConfigChange);
+  remindersUnsub = subscribeScheduledReminders(customer.phone, 20, onRemindersChange);
+  nextUpTimer = setInterval(renderNextUpBanner, 30_000);
 }
 
 export function closeChat() {
@@ -146,13 +160,28 @@ export function closeChat() {
   if (pendingDraftUnsub) { pendingDraftUnsub(); pendingDraftUnsub = null; }
   if (webhookEventsUnsub) { webhookEventsUnsub(); webhookEventsUnsub = null; }
   if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
+  if (configUnsub) { configUnsub(); configUnsub = null; }
+  if (remindersUnsub) { remindersUnsub(); remindersUnsub = null; }
   if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
+  if (nextUpTimer) { clearInterval(nextUpTimer); nextUpTimer = null; }
   activeChatId = null;
   activeCustomer = null;
   currentMessages = [];
   activePendingDraft = null;
   activeHold = null;
+  activeCustomerConfig = null;
+  activeReminders = [];
   webhookEventsByMessageId = new Map();
+}
+
+function onConfigChange(config) {
+  activeCustomerConfig = config;
+  renderNextUpBanner();
+}
+
+function onRemindersChange(entries) {
+  activeReminders = entries || [];
+  renderNextUpBanner();
 }
 
 function renderShell(c) {
@@ -179,6 +208,7 @@ function renderShell(c) {
       </div>
       <div id="hold-banner" class="hold-banner" hidden></div>
       <div id="pending-draft-banner" class="pending-draft" hidden></div>
+      <div id="next-up-banner" class="next-up" hidden></div>
       <form class="chat-composer" id="chat-composer">
         <div class="draft-btns">
           <button type="button" class="draft-btn coach" id="chat-draft-coach" title="Coach: workout accountability (Ctrl/Cmd+J)">&#x1F4AA;</button>
@@ -352,6 +382,126 @@ async function holdAutoSend() {
   } catch (err) {
     alert(`Hold failed: ${err.message}`);
   }
+}
+
+function renderNextUpBanner() {
+  const banner = document.getElementById('next-up-banner');
+  if (!banner) return;
+  const html = computeNextUp(activeCustomerConfig, activeReminders, activeCustomer);
+  if (!html) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  banner.hidden = false;
+  banner.innerHTML = html;
+}
+
+function computeNextUp(config, reminders, customer) {
+  const globalCfg = getCachedGlobalConfig();
+  if (globalCfg?.killSwitch) {
+    return `<span class="nu-icon">⛔</span><span class="nu-text">Kill switch ON — all automation paused globally</span>`;
+  }
+  if (!config) {
+    return `<span class="nu-icon">⚙</span><span class="nu-text">No AI config yet — open ⚙ to set up</span>`;
+  }
+  if (config.paused) {
+    return `<span class="nu-icon">⏸</span><span class="nu-text">Customer paused — no automated sends${config.pausedReason ? ' · ' + escapeHtml(config.pausedReason) : ''}</span>`;
+  }
+  if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) {
+    return `<span class="nu-icon">○</span><span class="nu-text">AI is off for this customer — turn on in ⚙</span>`;
+  }
+  // Build candidates
+  const now = Date.now();
+  const candidates = [];
+  const nextCron = computeNextMorningCron(config, now);
+  if (nextCron) {
+    candidates.push({ when: nextCron, label: `morning check-in at ${config.sendTimeIST || '08:00'} IST`, kind: 'cron' });
+  }
+  for (const r of reminders) {
+    if (r.status !== 'pending' || !r.fireAt) continue;
+    if (r.fireAt <= now) continue;
+    candidates.push({ when: r.fireAt, label: shortReason(r), kind: 'reminder', source: r.source });
+  }
+  candidates.sort((a, b) => a.when - b.when);
+  const next = candidates[0];
+
+  const modeLabel = config.autoCoachMode === 'auto-send' ? 'auto-sends' : 'queues a draft';
+
+  if (!next) {
+    return `<span class="nu-icon">💬</span><span class="nu-text">No scheduled events. AI ${modeLabel} when ${escapeHtml(customer?.name || 'this customer')} messages.</span>`;
+  }
+  const rel = relativeFuture(next.when - now);
+  const abs = formatAbsolute(next.when);
+  const kindLabel = next.kind === 'cron' ? '⏰' : '📅';
+  return `<span class="nu-icon">${kindLabel}</span><span class="nu-text">Next: ${escapeHtml(next.label)} · ${escapeHtml(abs)} (${escapeHtml(rel)})</span>`;
+}
+
+function shortReason(r) {
+  const map = {
+    'stated-intent-followup': 'follow-up on stated workout time',
+    'stated-intent-no-show': 'no-show check (if no workout reported)',
+    'end-of-week-gym': 'end-of-week gym nudge',
+    'streak-saver': 'streak restart nudge',
+    'comeback': 'comeback nudge after silence',
+    'manual': 'your manual reminder',
+  };
+  const base = map[r.source] || r.source || 'scheduled reminder';
+  if (r.reason && r.reason.length < 80) return `${base} — "${r.reason}"`;
+  return base;
+}
+
+function computeNextMorningCron(config, nowMs) {
+  const sendTime = config.sendTimeIST || '08:00';
+  const sendWindowMs = 15 * 60 * 1000;
+  const istNowMs = nowMs + 5.5 * 60 * 60000;
+  const istNow = new Date(istNowMs);
+  const todayStr = istNow.toISOString().slice(0, 10);
+  const todayAtSendUtcMs = Date.parse(`${todayStr}T${sendTime}:00.000Z`) - 5.5 * 60 * 60000;
+  const alreadyDoneToday = config.lastOutboundDate === todayStr && config.lastOutboundReason === 'cron-checkin';
+  if (!alreadyDoneToday && nowMs < todayAtSendUtcMs + sendWindowMs) {
+    return Math.max(todayAtSendUtcMs, nowMs + 1000);
+  }
+  const tomorrowIst = new Date(istNowMs + 86400000);
+  const tomorrowStr = tomorrowIst.toISOString().slice(0, 10);
+  return Date.parse(`${tomorrowStr}T${sendTime}:00.000Z`) - 5.5 * 60 * 60000;
+}
+
+function relativeFuture(ms) {
+  if (ms < 0) ms = 0;
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return 'in less than a minute';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `in ${min} min`;
+  const hr = Math.floor(min / 60);
+  const remM = min % 60;
+  if (hr < 24) {
+    if (remM > 5) return `in ${hr}h ${remM}m`;
+    return `in ${hr}h`;
+  }
+  const days = Math.floor(hr / 24);
+  if (days < 7) return `in ${days}d`;
+  return `in ${days}d`;
+}
+
+function formatAbsolute(ms) {
+  const d = new Date(ms);
+  const istMs = ms + 5.5 * 60 * 60000;
+  const ist = new Date(istMs);
+  const now = new Date();
+  const today = new Date(now.getTime() + 5.5 * 60 * 60000).toISOString().slice(0, 10);
+  const dStr = ist.toISOString().slice(0, 10);
+  const hm = ist.toISOString().slice(11, 16);
+  if (dStr === today) return `today ${hm} IST`;
+  const tomorrowStr = new Date(now.getTime() + 86400000 + 5.5 * 60 * 60000).toISOString().slice(0, 10);
+  if (dStr === tomorrowStr) return `tomorrow ${hm} IST`;
+  // For dates within 7 days, show weekday
+  const dayDiff = Math.floor((Date.parse(dStr) - Date.parse(today)) / 86400000);
+  if (dayDiff > 0 && dayDiff < 7) {
+    const weekday = ist.toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' });
+    return `${weekday} ${hm} IST`;
+  }
+  return `${dStr} ${hm} IST`;
 }
 
 async function discardPendingDraft() {

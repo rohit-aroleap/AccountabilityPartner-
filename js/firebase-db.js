@@ -25,6 +25,13 @@ export async function readConfig(phone) {
   return snap.exists() ? snap.val() : null;
 }
 
+export function subscribeConfig(phone, cb) {
+  const r = customerRef(phone, '/config');
+  const handler = (snap) => cb(snap.exists() ? snap.val() : null);
+  onValue(r, handler);
+  return () => off(r, 'value', handler);
+}
+
 export async function writeConfig(phone, patch) {
   await update(customerRef(phone, '/config'), patch);
 }
