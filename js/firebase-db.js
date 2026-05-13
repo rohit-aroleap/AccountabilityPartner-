@@ -152,28 +152,81 @@ export async function logWorkout(phone, entry) {
 }
 
 export function subscribeWebhookEventsForChat(chatId, n, cb) {
-  const r = ref(db, `${ROOT_PATH}/automation/feed`);
-  const q = query(r, limitToLast(n));
-  const handler = (snap) => {
-    const map = new Map();
+  const phoneKey = String(chatId).replace(/@c\.us$/, '').replace(/[^\d]/g, '');
+
+  // Hybrid subscription:
+  // - Per-customer feed (customers/<phoneKey>/webhookFeed) — large effective window because it's filtered server-side
+  // - Global feed (automation/feed) — fallback for historical entries written before per-customer path existed
+  // Results are merged; per-customer wins on conflicts since it's the canonical post-v1.034 source.
+
+  let globalMap = new Map();
+  let customerMap = new Map();
+
+  const pickBetter = (incoming, existing) => {
+    if (!existing) return true;
+    const incomingHasPrompt = !!incoming.userPrompt;
+    const existingHasPrompt = !!existing.userPrompt;
+    if (incomingHasPrompt && !existingHasPrompt) return true;
+    if (!incomingHasPrompt && existingHasPrompt) return false;
+    const incomingIsCreated = incoming.event === 'message.created';
+    const existingIsCreated = existing.event === 'message.created';
+    if (incomingIsCreated && !existingIsCreated) return true;
+    return false;
+  };
+
+  const merge = () => {
+    const combined = new Map();
+    // Per-customer first (preferred source)
+    for (const [k, v] of customerMap) combined.set(k, v);
+    // Global as fallback for ids not in customer feed
+    for (const [k, v] of globalMap) {
+      if (!combined.has(k) || pickBetter(v, combined.get(k))) combined.set(k, v);
+    }
+    cb(combined);
+  };
+
+  // Global feed subscription
+  const globalRef = ref(db, `${ROOT_PATH}/automation/feed`);
+  const globalQ = query(globalRef, limitToLast(n));
+  const globalHandler = (snap) => {
+    const next = new Map();
     snap.forEach(child => {
       const v = child.val();
       if (v?.type !== 'webhook' || v.chat_id !== chatId || !v.message_id) return;
-      const existing = map.get(v.message_id);
-      // Prefer the entry that actually has a userPrompt (the one that did real work)
-      // and the message.created event over message.updated/ack overwrites.
-      const incomingHasPrompt = !!v.userPrompt;
-      const existingHasPrompt = !!existing?.userPrompt;
-      const incomingIsCreated = v.event === 'message.created';
-      const existingIsCreated = existing?.event === 'message.created';
-      if (!existing
-        || (incomingHasPrompt && !existingHasPrompt)
-        || (incomingIsCreated && !existingIsCreated && !existingHasPrompt)) {
-        map.set(v.message_id, { id: child.key, ...v });
+      const existing = next.get(v.message_id);
+      if (!existing || pickBetter(v, existing)) {
+        next.set(v.message_id, { id: child.key, ...v });
       }
     });
-    cb(map);
+    globalMap = next;
+    merge();
   };
-  onValue(q, handler);
-  return () => off(q, 'value', handler);
+  onValue(globalQ, globalHandler);
+
+  // Per-customer feed subscription
+  let custUnsub = () => {};
+  if (phoneKey) {
+    const custRef = ref(db, `${ROOT_PATH}/customers/${phoneKey}/webhookFeed`);
+    const custQ = query(custRef, limitToLast(n));
+    const custHandler = (snap) => {
+      const next = new Map();
+      snap.forEach(child => {
+        const v = child.val();
+        if (!v || !v.message_id) return;
+        const existing = next.get(v.message_id);
+        if (!existing || pickBetter(v, existing)) {
+          next.set(v.message_id, { id: child.key, ...v });
+        }
+      });
+      customerMap = next;
+      merge();
+    };
+    onValue(custQ, custHandler);
+    custUnsub = () => off(custQ, 'value', custHandler);
+  }
+
+  return () => {
+    off(globalQ, 'value', globalHandler);
+    custUnsub();
+  };
 }

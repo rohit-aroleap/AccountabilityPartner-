@@ -1081,6 +1081,15 @@ async function fbPush(path, value) {
 async function logAutomation(event) {
   try {
     await fbPush('automation/feed', { ts: Date.now(), ...event });
+    // For webhook events with a chat_id, also write to the per-customer feed.
+    // This gives the dashboard a much larger effective window per customer than the
+    // shared global feed (which gets crowded by cron + other customers).
+    if (event.type === 'webhook' && event.chat_id) {
+      const phoneKey = String(event.chat_id).replace(/@c\.us$/, '').replace(/[^\d]/g, '');
+      if (phoneKey) {
+        await fbPush(`customers/${phoneKey}/webhookFeed`, { ts: Date.now(), ...event });
+      }
+    }
   } catch (err) {
     console.error('logAutomation failed:', err.message);
   }
