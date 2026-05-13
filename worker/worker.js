@@ -383,6 +383,18 @@ async function processInboundReply(env, payload) {
     return { ignored: 'duplicate' };
   }
 
+  // Race-condition guard: mark this message_id as being processed BEFORE the slow path (LLM, Periskope send).
+  // Without this, a duplicate webhook delivery during the ~15-30s processing window would slip past the dedup
+  // above (which compares against the previous lastInboundMessageId) and trigger a second LLM call + send.
+  // Mutating config in-memory too so later reads in this function see the updated value.
+  if (data.message_id) {
+    config.lastInboundMessageId = data.message_id;
+    await fbPatch(`customers/${phoneKey}/config`, {
+      lastInboundMessageId: data.message_id,
+      lastInboundAt: Date.now(),
+    });
+  }
+
   if (config.paused) {
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'inbound', source: 'webhook', action: 'received-while-paused',
