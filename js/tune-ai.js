@@ -231,6 +231,7 @@ function buildModalHtml() {
         <button type="button" class="tune-tab-btn" data-tab="killswitch">Kill Switch</button>
         <button type="button" class="tune-tab-btn" data-tab="sandbox">Sandbox</button>
         <button type="button" class="tune-tab-btn" data-tab="usage">Usage</button>
+        <button type="button" class="tune-tab-btn" data-tab="maintenance">Maintenance</button>
         <button type="button" class="tune-tab-btn" data-tab="best-practices">Best Practices</button>
       </div>
       <div class="modal-body tune-body">
