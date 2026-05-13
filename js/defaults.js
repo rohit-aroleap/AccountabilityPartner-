@@ -83,6 +83,7 @@ export const DEFAULT_SAFETY = {
   quietHoursEnd: '08:00',
   maxOutboundPerDay: 3,
   minMinutesBetweenOutbound: 240,
+  minMinutesBetweenAutoTriggers: 180,
   maxAutoTurnsPerSession: 4,
   sessionIdleMinutes: 60,
   sendWindowMin: 15,

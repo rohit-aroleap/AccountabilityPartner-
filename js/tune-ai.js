@@ -140,6 +140,7 @@ async function onSave(e) {
       quietHoursEnd: (data.get('quietHoursEnd') || '08:00').trim(),
       maxOutboundPerDay: parseInt(data.get('maxOutboundPerDay'), 10) || DEFAULT_SAFETY.maxOutboundPerDay,
       minMinutesBetweenOutbound: parseInt(data.get('minMinutesBetweenOutbound'), 10) || DEFAULT_SAFETY.minMinutesBetweenOutbound,
+      minMinutesBetweenAutoTriggers: parseInt(data.get('minMinutesBetweenAutoTriggers'), 10) || DEFAULT_SAFETY.minMinutesBetweenAutoTriggers,
       maxAutoTurnsPerSession: parseInt(data.get('maxAutoTurnsPerSession'), 10) || DEFAULT_SAFETY.maxAutoTurnsPerSession,
       sessionIdleMinutes: parseInt(data.get('sessionIdleMinutes'), 10) || DEFAULT_SAFETY.sessionIdleMinutes,
       sendWindowMin: parseInt(data.get('sendWindowMin'), 10) || DEFAULT_SAFETY.sendWindowMin,
@@ -305,7 +306,12 @@ function buildModalHtml() {
               <div class="field">
                 <label>Suggested min gap between sends (minutes)</label>
                 <input type="number" name="minMinutesBetweenOutbound" min="5" max="1440" />
-                <div class="help">Manual sends get a warning if shorter; auto-send doesn't enforce this hard</div>
+                <div class="help">Manual sends get a warning if shorter than this; doesn't block</div>
+              </div>
+              <div class="field">
+                <label>Hard min gap between AUTO triggers (minutes)</label>
+                <input type="number" name="minMinutesBetweenAutoTriggers" min="5" max="1440" />
+                <div class="help">Cron + scheduled reminders skip if last outbound was within this window. Webhook auto-replies are exempt (customer is actively chatting).</div>
               </div>
               <div class="field">
                 <label>Max auto-replies per session</label>

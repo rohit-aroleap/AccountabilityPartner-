@@ -31,6 +31,7 @@ const SAFETY = {
   quietHoursEnd: '08:00',
   maxOutboundPerDay: 3,
   minMinutesBetweenOutbound: 240,
+  minMinutesBetweenAutoTriggers: 180,
   sendWindowMin: 15,
   maxAutoTurnsPerSession: 4,
   sessionIdleMinutes: 60,
@@ -574,6 +575,11 @@ async function runCron(env) {
       skipped.push({ phoneKey, why: 'already-cron-today' });
       continue;
     }
+    const minGapMs = (global.safety.minMinutesBetweenAutoTriggers ?? SAFETY.minMinutesBetweenAutoTriggers) * 60 * 1000;
+    if (config.lastOutboundAt && (Date.now() - config.lastOutboundAt) < minGapMs) {
+      skipped.push({ phoneKey, why: 'min-gap' });
+      continue;
+    }
     const sendTime = config.sendTimeIST || '08:00';
     if (!isInSendWindow(ist.hm, sendTime, global.safety.sendWindowMin)) {
       skipped.push({ phoneKey, why: 'outside-window', current: ist.hm, want: sendTime });
@@ -699,6 +705,17 @@ async function scanAndFireReminders(env, customers, global, ist, today) {
       if (!rem || rem.status !== 'pending') continue;
       if (!rem.fireAt || rem.fireAt > now) continue;
       if (config.outboundCountDate === today && (config.outboundCountToday ?? 0) >= global.safety.maxOutboundPerDay) continue;
+      const minGapMs = (global.safety.minMinutesBetweenAutoTriggers ?? SAFETY.minMinutesBetweenAutoTriggers) * 60 * 1000;
+      if (config.lastOutboundAt && (Date.now() - config.lastOutboundAt) < minGapMs) {
+        // Don't fire if we sent another auto-trigger recently — log and keep pending
+        await fbPush(`customers/${phoneKey}/activity`, {
+          ts: Date.now(), direction: 'system', source: 'reminder',
+          action: 'skipped-min-gap',
+          message: `last outbound ${Math.round((Date.now() - config.lastOutboundAt) / 60000)} min ago, gap requires ${global.safety.minMinutesBetweenAutoTriggers ?? SAFETY.minMinutesBetweenAutoTriggers} min`,
+          reminderSource: rem.source,
+        });
+        continue;
+      }
       if (inQuietHours(ist.hm, global.safety)) continue;
 
       // No-show check: if customer already reported workout since the reminder was created, cancel
