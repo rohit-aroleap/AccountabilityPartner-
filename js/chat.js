@@ -724,6 +724,8 @@ function renderAiBadge(messageId) {
     cls = 'warn'; text = 'AI: onboarding skipped'; tooltip = 'Customer typed "skip" — defaults applied';
   } else if (r.ignored === 'unparseable-answer') {
     cls = 'skip'; text = `AI: onboarding · nudged`; tooltip = `Answer couldn't be parsed (${r.reason || 'unclear'}) — nudge sent`;
+  } else if (r.ignored === 'webhook-rate-limit') {
+    cls = 'skip'; text = 'AI: skip · rate-limit'; tooltip = `Suppressed to prevent burst. Last outbound was ${Math.round((r.lastOutboundDeltaMs || 0) / 1000)}s ago, gate is set higher in Tune AI → Safety.`;
   } else if (r.ignored === 'wrong-event') {
     cls = 'skip';
     const got = r.got || ev.event || '(missing)';

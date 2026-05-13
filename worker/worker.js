@@ -32,6 +32,7 @@ const SAFETY = {
   maxOutboundPerDay: 3,
   minMinutesBetweenOutbound: 240,
   minMinutesBetweenAutoTriggers: 180,
+  minSecondsBetweenWebhookReplies: 60,
   sendWindowMin: 15,
   maxAutoTurnsPerSession: 4,
   sessionIdleMinutes: 60,
@@ -774,6 +775,20 @@ async function processInboundReply(env, payload) {
     });
     await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
     return { ignored: 'daily-cap' };
+  }
+  // Webhook rate limit — race-condition guard against multiple concurrent webhook deliveries
+  // (Periskope sometimes re-delivers; our dashboard replay can also race). Concurrent invocations
+  // all read the same lastOutboundAt before any of them writes, so the per-day cap can be passed
+  // by all of them. This minSecondsBetweenWebhookReplies gate enforces a short floor that's hard
+  // to race past: if we sent ANYTHING outbound within the last N seconds, this invocation skips.
+  const minWebhookGapMs = (global.safety.minSecondsBetweenWebhookReplies ?? SAFETY.minSecondsBetweenWebhookReplies) * 1000;
+  if (config.lastOutboundAt && (Date.now() - config.lastOutboundAt) < minWebhookGapMs) {
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'webhook', action: 'skipped-webhook-rate-limit',
+      message: `last outbound ${Math.round((Date.now() - config.lastOutboundAt) / 1000)}s ago, gate=${global.safety.minSecondsBetweenWebhookReplies ?? SAFETY.minSecondsBetweenWebhookReplies}s`,
+    });
+    await fbPatch(`customers/${phoneKey}/config`, { lastInboundMessageId: data.message_id, lastInboundAt: Date.now() });
+    return { ignored: 'webhook-rate-limit', lastOutboundDeltaMs: Date.now() - config.lastOutboundAt };
   }
   if (inQuietHours(ist.hm, global.safety)) {
     await fbPush(`customers/${phoneKey}/activity`, {

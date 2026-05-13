@@ -67,6 +67,11 @@ function mergeWithDefaults(cfg) {
     personaMale: (typeof cfg?.personaMale === 'string' && cfg.personaMale.trim()) || DEFAULT_GLOBAL.personaMale,
     personaFemale: (typeof cfg?.personaFemale === 'string' && cfg.personaFemale.trim()) || DEFAULT_GLOBAL.personaFemale,
     personalities: mergePersonalities(cfg?.personalities),
-    safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
+    safety: {
+      ...DEFAULT_GLOBAL.safety,
+      ...(cfg?.safety || {}),
+      // Backward-compat: customers who saved safety before v1.042 won't have minSecondsBetweenWebhookReplies
+      minSecondsBetweenWebhookReplies: cfg?.safety?.minSecondsBetweenWebhookReplies ?? DEFAULT_GLOBAL.safety.minSecondsBetweenWebhookReplies,
+    },
   };
 }

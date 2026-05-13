@@ -84,6 +84,7 @@ export const DEFAULT_SAFETY = {
   maxOutboundPerDay: 3,
   minMinutesBetweenOutbound: 240,
   minMinutesBetweenAutoTriggers: 180,
+  minSecondsBetweenWebhookReplies: 60,
   maxAutoTurnsPerSession: 4,
   sessionIdleMinutes: 60,
   sendWindowMin: 15,

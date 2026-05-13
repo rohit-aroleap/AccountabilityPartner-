@@ -156,6 +156,7 @@ async function onSave(e) {
       maxOutboundPerDay: parseInt(data.get('maxOutboundPerDay'), 10) || DEFAULT_SAFETY.maxOutboundPerDay,
       minMinutesBetweenOutbound: parseInt(data.get('minMinutesBetweenOutbound'), 10) || DEFAULT_SAFETY.minMinutesBetweenOutbound,
       minMinutesBetweenAutoTriggers: parseInt(data.get('minMinutesBetweenAutoTriggers'), 10) || DEFAULT_SAFETY.minMinutesBetweenAutoTriggers,
+      minSecondsBetweenWebhookReplies: parseInt(data.get('minSecondsBetweenWebhookReplies'), 10) || DEFAULT_SAFETY.minSecondsBetweenWebhookReplies,
       maxAutoTurnsPerSession: parseInt(data.get('maxAutoTurnsPerSession'), 10) || DEFAULT_SAFETY.maxAutoTurnsPerSession,
       sessionIdleMinutes: parseInt(data.get('sessionIdleMinutes'), 10) || DEFAULT_SAFETY.sessionIdleMinutes,
       sendWindowMin: parseInt(data.get('sendWindowMin'), 10) || DEFAULT_SAFETY.sendWindowMin,
@@ -327,7 +328,12 @@ function buildModalHtml() {
               <div class="field">
                 <label>Hard min gap between AUTO triggers (minutes)</label>
                 <input type="number" name="minMinutesBetweenAutoTriggers" min="5" max="1440" />
-                <div class="help">Cron + scheduled reminders skip if last outbound was within this window. Webhook auto-replies are exempt (customer is actively chatting).</div>
+                <div class="help">Cron + scheduled reminders skip if last outbound was within this window.</div>
+              </div>
+              <div class="field">
+                <label>Hard min gap between webhook auto-replies (seconds)</label>
+                <input type="number" name="minSecondsBetweenWebhookReplies" min="5" max="600" />
+                <div class="help">Race-condition guard against duplicate webhook deliveries or replay storms. If we sent ANYTHING outbound within this window, the next webhook reply skips. Default 60s keeps conversation responsive but blocks bursts.</div>
               </div>
               <div class="field">
                 <label>Max auto-replies per session</label>
