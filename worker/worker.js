@@ -98,6 +98,16 @@ const ONBOARDING_PROMPTS = {
   language: `Last one — what language do you prefer?\n\n1. English\n2. Hindi\n3. Both (Hinglish)`,
 };
 
+// Short titles for WhatsApp poll mode (poll names render best when concise; numbered list is stripped)
+const ONBOARDING_POLL_TITLES = {
+  goal: `Quick setup — what's your top fitness goal?`,
+  age: `Q2 of 6 — what's your age range?`,
+  gender: `Q3 of 6 — would you prefer a male or female coach?`,
+  style: `Q4 of 6 — pick the coach style that fits you best`,
+  intensity: `Q5 of 6 — what level of intensity do you want from your coach?`,
+  language: `Last one — what language do you prefer?`,
+};
+
 const ONBOARDING_WRAPUP = `All set 🙌 Your coach is dialed in. I'll check in tomorrow morning — talk soon.`;
 
 const INTENSITY_TO_NUMBER = {
@@ -455,7 +465,9 @@ async function startOnboarding(env, phoneKey) {
 
 async function sendOnboardingMessage(env, phoneKey, qKey, ist, global) {
   const text = ONBOARDING_PROMPTS[qKey];
-  if (!text) return;
+  const question = ONBOARDING_QUESTIONS[qKey];
+  const pollTitle = ONBOARDING_POLL_TITLES[qKey];
+  if (!text || !question) return;
   if (inQuietHours(ist.hm, global.safety)) {
     await fbPatch(`customers/${phoneKey}/config`, { onboardingPausedForQuiet: true });
     await fbPush(`customers/${phoneKey}/activity`, {
@@ -465,15 +477,47 @@ async function sendOnboardingMessage(env, phoneKey, qKey, ist, global) {
     return;
   }
   const chatId = `${phoneKey}@c.us`;
-  await sendViaPeriskope(env, chatId, text);
+  let sentAs = 'poll';
+  try {
+    await sendViaPeriskopePoll(env, chatId, pollTitle || question.label, question.options);
+  } catch (err) {
+    console.error(`Poll send failed for ${qKey}, falling back to text:`, err.message);
+    sentAs = 'text';
+    await sendViaPeriskope(env, chatId, text);
+  }
   await fbPatch(`customers/${phoneKey}/config`, {
     onboardingPausedForQuiet: null,
     lastOutboundAt: Date.now(),
   });
   await fbPush(`customers/${phoneKey}/activity`, {
     ts: Date.now(), direction: 'outbound', source: 'onboarding',
-    action: `question-sent-${qKey}`, message: text,
+    action: `question-sent-${qKey}-${sentAs}`,
+    message: sentAs === 'poll' ? `[poll] ${pollTitle || question.label}` : text,
   });
+}
+
+async function sendViaPeriskopePoll(env, chatId, pollName, pollOptions) {
+  if (!Array.isArray(pollOptions) || pollOptions.length < 2) {
+    throw new Error('poll requires at least 2 options');
+  }
+  const r = await fetch(`${PERISKOPE_BASE}/message/send`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.PERISKOPE_API_KEY}`,
+      'x-phone': env.PERISKOPE_PHONE,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      poll: {
+        pollName,
+        pollOptions,
+        allowMultipleAnswers: false,
+      },
+    }),
+  });
+  if (!r.ok) throw new Error(`Periskope poll send ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  return r.json();
 }
 
 async function sendOnboardingWrapup(env, phoneKey, ist, global) {
@@ -515,7 +559,7 @@ async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text
   }
 
   const question = ONBOARDING_QUESTIONS[qKey];
-  const parsed = await parseOnboardingAnswer(env, qKey, question, text);
+  const parsed = await parseOnboardingAnswer(env, qKey, question, text, data);
   if (!parsed.valid) {
     const questionsAhead = ONBOARDING_QUESTION_ORDER.length - ONBOARDING_QUESTION_ORDER.indexOf(qKey);
     const nudge = `Quick — ${questionsAhead} ${questionsAhead === 1 ? 'question' : 'questions'} left and we're set. We can chat after we finish.\n\n${ONBOARDING_PROMPTS[qKey]}`;
@@ -581,14 +625,38 @@ async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text
   return { acted: 'onboarding-advanced', nextState };
 }
 
-async function parseOnboardingAnswer(env, qKey, question, userText) {
+async function parseOnboardingAnswer(env, qKey, question, userText, payloadData) {
+  // Poll vote fast-path: if the inbound payload carries poll-vote metadata, use it directly.
+  // Periskope's exact field shape isn't documented, so we look for a few likely candidates.
+  if (payloadData && typeof payloadData === 'object') {
+    const voteCandidates = [
+      payloadData.selected_options,
+      payloadData.selectedOptions,
+      payloadData.poll_response?.selected_options,
+      payloadData.poll_vote?.selected_options,
+      payloadData.poll?.selected_options,
+      payloadData.poll_choice,
+      payloadData.pollSelectedOptions,
+    ].find(v => v !== undefined && v !== null);
+    if (voteCandidates) {
+      const arr = Array.isArray(voteCandidates) ? voteCandidates : [voteCandidates];
+      for (const v of arr) {
+        const s = typeof v === 'string' ? v : (v?.name || v?.label || v?.option_name || '');
+        const idx = question.options.findIndex(opt => opt.toLowerCase() === String(s).toLowerCase());
+        if (idx >= 0) return { valid: true, value: question.options[idx], source: 'poll' };
+      }
+    }
+  }
   if (!userText || userText.length < 1) return { valid: false, reason: 'empty' };
+  // Exact text match — happens when WhatsApp delivers poll taps as the option label text
+  const exactIdx = question.options.findIndex(opt => opt.toLowerCase() === userText.trim().toLowerCase());
+  if (exactIdx >= 0) return { valid: true, value: question.options[exactIdx], source: 'exact-text' };
   // Fast path: if it's just a number in range, accept
   const numMatch = userText.trim().match(/^([0-9]+)$/);
   if (numMatch) {
     const n = parseInt(numMatch[1], 10);
     if (n >= 1 && n <= question.options.length) {
-      return { valid: true, value: question.options[n - 1] };
+      return { valid: true, value: question.options[n - 1], source: 'number' };
     }
   }
   const optionsList = question.options.map((opt, i) => `${i+1}. ${opt}`).join('\n');
