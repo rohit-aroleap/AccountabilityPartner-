@@ -67,6 +67,79 @@ export async function deleteCustomerData(phone) {
   await remove(customerRef(phone, ''));
 }
 
+export async function backfillWebhookFeeds({ onLog, onProgress } = {}) {
+  const log = onLog || (() => {});
+  const progress = onProgress || (() => {});
+
+  log('Reading global automation/feed…');
+  const feedRef = ref(db, `${ROOT_PATH}/automation/feed`);
+  const snap = await get(feedRef);
+  if (!snap.exists()) {
+    log('No automation/feed entries found.');
+    return { total: 0, migrated: 0, skipped: 0, customers: 0 };
+  }
+
+  // Collect webhook entries with chat_id
+  const entries = [];
+  snap.forEach(child => {
+    const v = child.val();
+    if (v?.type === 'webhook' && v.chat_id && v.message_id) {
+      entries.push({ id: child.key, data: v });
+    }
+  });
+
+  log(`Found ${entries.length} webhook entries (with chat_id + message_id) in global feed.`);
+
+  // Group by phoneKey
+  const byPhone = new Map();
+  for (const e of entries) {
+    const phoneKey = String(e.data.chat_id).replace(/@c\.us$/, '').replace(/[^\d]/g, '');
+    if (!phoneKey) continue;
+    if (!byPhone.has(phoneKey)) byPhone.set(phoneKey, []);
+    byPhone.get(phoneKey).push(e);
+  }
+
+  log(`Distinct customers: ${byPhone.size}.`);
+
+  let migrated = 0;
+  let skipped = 0;
+  let processed = 0;
+  const total = entries.length;
+
+  for (const [phoneKey, custEntries] of byPhone) {
+    const custRef = ref(db, `${ROOT_PATH}/customers/${phoneKey}/webhookFeed`);
+    const custSnap = await get(custRef);
+    const existing = new Set();
+    if (custSnap.exists()) {
+      custSnap.forEach(child => {
+        const v = child.val();
+        if (v?.message_id) existing.add(v.message_id);
+      });
+    }
+
+    let custMigrated = 0;
+    let custSkipped = 0;
+    for (const e of custEntries) {
+      processed++;
+      if (existing.has(e.data.message_id)) {
+        custSkipped++;
+        skipped++;
+      } else {
+        const newRef = push(custRef);
+        await set(newRef, e.data);
+        existing.add(e.data.message_id);
+        custMigrated++;
+        migrated++;
+      }
+      if (processed % 25 === 0) progress(processed, total);
+    }
+    log(`  +${phoneKey}: migrated ${custMigrated}, skipped ${custSkipped}`);
+  }
+
+  progress(total, total);
+  return { total, migrated, skipped, customers: byPhone.size };
+}
+
 export async function readPendingDraft(phone) {
   const snap = await get(customerRef(phone, '/pendingDraft'));
   return snap.exists() ? snap.val() : null;

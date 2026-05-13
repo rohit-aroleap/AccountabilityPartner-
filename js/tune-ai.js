@@ -1,4 +1,5 @@
 import { loadGlobalConfig, saveGlobalConfig, getCachedGlobalConfig } from './global-config.js';
+import { backfillWebhookFeeds } from './firebase-db.js';
 import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE, DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM } from './defaults.js';
 import { parseCustomerPhones, loadSettings } from './storage.js';
 import { subscribeAiUsage } from './firebase-db.js';
@@ -25,6 +26,7 @@ export function initTuneAi() {
   document.getElementById('tune-reset-gym').addEventListener('click', () => resetField('gym'));
   document.getElementById('tune-reset-intro-ferra').addEventListener('click', () => resetField('intro-ferra'));
   document.getElementById('tune-reset-intro-gym').addEventListener('click', () => resetField('intro-gym'));
+  document.getElementById('tune-backfill').addEventListener('click', runBackfill);
   document.getElementById('tune-sandbox-run').addEventListener('click', runSandbox);
   modalEl.querySelectorAll('.tune-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -360,6 +362,17 @@ function buildModalHtml() {
             <div id="tune-usage" class="tune-usage">Loading…</div>
           </div>
 
+          <div class="tune-pane" data-pane="maintenance">
+            <p class="tune-blurb">One-time data operations. Read carefully before running.</p>
+            <div class="field">
+              <label>Backfill webhook events to per-customer feeds</label>
+              <div class="help">v1.034 introduced per-customer <code>customers/&lt;phone&gt;/webhookFeed</code> paths so the AI badges in chat can stay resolved over a long history. This action copies every existing entry from the global <code>automation/feed</code> to the matching customer's per-customer feed. After this runs, even old "AI: out of view" bubbles will show their real decision. Safe to re-run — it skips entries already present in the per-customer feed.</div>
+              <button type="button" class="btn" id="tune-backfill" style="margin-top:10px;">Run backfill</button>
+              <div id="tune-backfill-progress" class="bf-progress" hidden></div>
+              <div id="tune-backfill-log" class="bf-log" hidden></div>
+            </div>
+          </div>
+
           <div class="tune-pane" data-pane="best-practices">
             ${buildBestPracticesHtml()}
           </div>
@@ -372,6 +385,35 @@ function buildModalHtml() {
       </div>
     </div>
   `;
+}
+
+async function runBackfill() {
+  const btn = document.getElementById('tune-backfill');
+  const progressEl = document.getElementById('tune-backfill-progress');
+  const logEl = document.getElementById('tune-backfill-log');
+  if (!confirm('Run backfill? This reads the entire global automation/feed and writes per-customer copies. Typically takes a few seconds to a few minutes depending on history size. Safe to re-run.')) return;
+  btn.disabled = true;
+  progressEl.hidden = false;
+  logEl.hidden = false;
+  progressEl.textContent = 'Starting…';
+  logEl.innerHTML = '';
+  const append = (line) => {
+    logEl.insertAdjacentHTML('beforeend', `<div class="bf-line">${escapeHtml(line)}</div>`);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  try {
+    const result = await backfillWebhookFeeds({
+      onLog: append,
+      onProgress: (done, total) => { progressEl.textContent = `Processed ${done} / ${total}`; },
+    });
+    progressEl.textContent = `Done. Total ${result.total} · migrated ${result.migrated} · skipped (already present) ${result.skipped} · customers touched ${result.customers}.`;
+    append(`Finished. Hard-reload the dashboard to see resolved badges for old bubbles.`);
+  } catch (err) {
+    progressEl.textContent = `Error: ${err.message}`;
+    append(`Error: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function buildBestPracticesHtml() {
