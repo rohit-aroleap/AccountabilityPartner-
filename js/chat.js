@@ -40,6 +40,7 @@ let activeCustomerConfig = null;
 let activeReminders = [];
 let webhookEventsByMessageId = new Map();
 let replayedMessageIds = new Set();
+let webhookSubLoaded = false;
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
@@ -146,6 +147,7 @@ export async function openChatFor(customer) {
   activeReminders = [];
   webhookEventsByMessageId = new Map();
   replayedMessageIds = new Set();
+  webhookSubLoaded = false;
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
@@ -769,6 +771,7 @@ function explainSkip(reason) {
 
 function onWebhookEventsChange(map) {
   webhookEventsByMessageId = map;
+  webhookSubLoaded = true;
   // Re-render badges in-place without scrolling
   document.querySelectorAll('.bubble.in[data-message-id]').forEach(el => {
     const id = el.dataset.messageId;
@@ -784,6 +787,10 @@ function onWebhookEventsChange(map) {
 
 async function maybeReplayOrphanInbounds() {
   if (!activeCustomer || !activeChatId) return;
+  // Guard: don't fire replays until the webhook events subscription has loaded at least once.
+  // Without this, opening a chat would replay every recent inbound because the local map is empty
+  // — even for inbounds that already have a feed entry recording a (correct) rate-limit skip etc.
+  if (!webhookSubLoaded) return;
   const startTs = activeCustomerConfig?.conversationStartTs || 0;
   const now = Date.now();
   const REPLAY_MAX_AGE_MS = 30 * 60 * 1000; // only replay inbounds from the last 30 minutes

@@ -1745,6 +1745,26 @@ function buildGymPrompt({ phone, user, config, messages, istNow, workoutLog, lat
 }
 
 async function extractAndLogWorkout(env, phoneKey, messageBody, ist) {
+  // Skip if we already logged a workout for this customer in the last 4 hours.
+  // This prevents double-counting when a customer reports a workout and then sends
+  // clarification messages (e.g., "Workout done today" → logged, then "Legs" → would
+  // also be logged as a SECOND workout). Same session = one log entry.
+  try {
+    const recent = await fetchWorkoutLog(phoneKey, 3);
+    const fourHoursAgo = Date.now() - 4 * 60 * 60 * 1000;
+    const recentEntry = (recent || []).find(w => (w.ts || 0) > fourHoursAgo);
+    if (recentEntry) {
+      await fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(), direction: 'system', source: 'webhook',
+        action: 'workout-extract-skipped-recent',
+        message: `recent log entry ${Math.round((Date.now() - recentEntry.ts) / 60000)} min ago — clarification likely`,
+      });
+      return;
+    }
+  } catch (err) {
+    // If we can't read the log, fall through to extract — better to occasionally double-log than miss
+  }
+
   const prompt = `Did this WhatsApp message from a customer indicate they COMPLETED a physical workout/training session? Be conservative — only count clear past-tense reports of done workouts, not future intentions or vague mentions.
 
 Message: "${messageBody}"
