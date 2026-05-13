@@ -93,6 +93,11 @@ export function initCustomerSettings() {
           <div id="cs-status" class="cs-status"></div>
         </div>
 
+        <div class="cs-section" id="cs-onboarding-section">
+          <h3>Onboarding</h3>
+          <div id="cs-onboarding" class="cs-status"></div>
+        </div>
+
         <div class="cs-section" id="cs-workout-section" hidden>
           <h3>Recent workout log <span class="cs-hint">(auto-captured from chat for gym customers)</span></h3>
           <div id="cs-workout-log" class="cs-workout-log">Loading…</div>
@@ -168,6 +173,7 @@ export async function openCustomerSettings(customer) {
   autoDetectedType = (await isPhoneInFerraExport(customer.phone)) ? 'ferra' : 'gym';
   hydrateForm();
   renderStatus();
+  renderOnboarding();
   refreshTypeUI();
   if (activityUnsub) activityUnsub();
   if (workoutLogUnsub) workoutLogUnsub();
@@ -243,11 +249,75 @@ async function onSave(e) {
     currentConfig = { ...currentConfig, ...patch };
     document.getElementById('cs-save-status').textContent = 'Saved.';
     renderStatus();
+    renderOnboarding();
     refreshTypeUI();
     listeners.forEach(fn => { try { fn(currentPhone, currentConfig); } catch {} });
     setTimeout(() => { document.getElementById('cs-save-status').textContent = ''; }, 1500);
   } catch (err) {
     document.getElementById('cs-save-status').textContent = `Failed: ${err.message}`;
+  }
+}
+
+function renderOnboarding() {
+  const el = document.getElementById('cs-onboarding');
+  if (!el) return;
+  const state = currentConfig.onboardingState || 'idle';
+  const labels = {
+    idle: 'No onboarding flow set (existing customer)',
+    pending: 'Pending — onboarding questions queued',
+    'awaiting-goal': 'Awaiting Q1 (Goal)',
+    'awaiting-age': 'Awaiting Q2 (Age)',
+    'awaiting-gender': 'Awaiting Q3 (Coach gender)',
+    'awaiting-style': 'Awaiting Q4 (Coach style)',
+    'awaiting-intensity': 'Awaiting Q5 (Intensity)',
+    'awaiting-language': 'Awaiting Q6 (Language)',
+    complete: 'Complete — personality assigned',
+    skipped: 'Skipped (operator chose defaults)',
+  };
+  const parts = [`<div><strong>State:</strong> ${escapeHtml(labels[state] || state)}</div>`];
+  const ans = currentConfig.onboardingAnswers;
+  if (ans && Object.keys(ans).length) {
+    parts.push('<div style="margin-top:6px;"><strong>Answers:</strong></div>');
+    for (const [k, v] of Object.entries(ans)) {
+      parts.push(`<div style="font-size:12px;">  ${escapeHtml(k)}: ${escapeHtml(String(v))}</div>`);
+    }
+  }
+  if (currentConfig.coachPersonality) {
+    parts.push(`<div style="margin-top:6px;"><strong>Personality:</strong> ${escapeHtml(currentConfig.coachPersonality)}${currentConfig.coachIntensity ? ' · intensity ' + escapeHtml(String(currentConfig.coachIntensity)) : ''}</div>`);
+  }
+  if (state === 'pending' || state.startsWith('awaiting-') || state === 'complete' || state === 'skipped') {
+    parts.push(`<div style="margin-top:10px;"><button type="button" class="btn-ghost btn" id="cs-reset-onboarding" style="font-size:12px;padding:5px 12px;">Reset onboarding</button></div>`);
+  }
+  el.innerHTML = parts.join('');
+  const btn = document.getElementById('cs-reset-onboarding');
+  if (btn) btn.addEventListener('click', resetOnboarding);
+}
+
+async function resetOnboarding() {
+  if (!currentPhone) return;
+  if (!confirm('Reset onboarding for this customer? Their answers and assigned personality will be cleared, state goes back to pending, and the next webhook will re-trigger Q1.')) return;
+  try {
+    await writeConfig(currentPhone, {
+      onboardingState: 'pending',
+      onboardingAnswers: null,
+      onboardingStartedAt: null,
+      onboardingCompletedAt: null,
+      coachPersonality: null,
+      coachIntensity: null,
+      coachLanguage: null,
+      coachGenderPref: null,
+    });
+    currentConfig = { ...currentConfig,
+      onboardingState: 'pending',
+      onboardingAnswers: null,
+      coachPersonality: null,
+      coachIntensity: null,
+      coachLanguage: null,
+      coachGenderPref: null,
+    };
+    renderOnboarding();
+  } catch (err) {
+    alert(`Reset failed: ${err.message}`);
   }
 }
 

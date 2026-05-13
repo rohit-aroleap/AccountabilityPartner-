@@ -55,6 +55,8 @@ function mergeWithDefaults(cfg) {
       ? cfg.introMessageFerra : DEFAULT_GLOBAL.introMessageFerra,
     introMessageGym: typeof cfg?.introMessageGym === 'string' && cfg.introMessageGym.length > 0
       ? cfg.introMessageGym : DEFAULT_GLOBAL.introMessageGym,
+    personaMale: (typeof cfg?.personaMale === 'string' && cfg.personaMale.trim()) || DEFAULT_GLOBAL.personaMale,
+    personaFemale: (typeof cfg?.personaFemale === 'string' && cfg.personaFemale.trim()) || DEFAULT_GLOBAL.personaFemale,
     safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
   };
 }

@@ -58,6 +58,16 @@ export function initAddCustomer() {
               <textarea id="ac-introMessage" name="introMessage" rows="6"></textarea>
             </div>
           </div>
+
+          <div class="ac-section">
+            <label class="ac-toggle-row">
+              <input type="checkbox" id="ac-skipOnboarding" name="skipOnboarding" />
+              <div>
+                <div class="ac-toggle-title">Skip onboarding questionnaire</div>
+                <div class="ac-toggle-sub">Check this if you already know the customer's preferences or want to start fresh without asking them 6 questions over WhatsApp. The customer goes straight to the default coach voice; you can manually set personality in their ⚙ later.</div>
+              </div>
+            </label>
+          </div>
         </form>
       </div>
       <div class="modal-footer">
@@ -155,6 +165,7 @@ async function onSave(e) {
   const phone = f.phone.value;
   const startFresh = f.startFresh.checked;
   const sendIntro = f.sendIntro.checked;
+  const skipOnboarding = f.skipOnboarding.checked;
   const introMessage = (f.introMessage.value || '').trim();
   const status = document.getElementById('ac-status');
 
@@ -172,6 +183,10 @@ async function onSave(e) {
   const configPatch = {};
   if (startFresh) configPatch.conversationStartTs = now;
   if (detectedType === 'ferra' || detectedType === 'gym') configPatch.customerType = detectedType;
+  // Onboarding state — only set for NEW customers when not skipped.
+  // Actual question delivery happens in v1.040; this just sets the marker so the AI knows to wait.
+  configPatch.onboardingState = skipOnboarding ? 'skipped' : 'pending';
+  if (skipOnboarding) configPatch.onboardingSkippedAt = now;
   if (Object.keys(configPatch).length) {
     try {
       await writeConfig(normPhone, configPatch);
