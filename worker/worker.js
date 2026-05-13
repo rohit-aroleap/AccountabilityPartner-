@@ -211,6 +211,7 @@ export default {
       if (url.pathname === '/workout' || url.pathname === '/workout/') return handleWorkout(request, env, corsHeaders);
       if (url.pathname === '/periskope/send') return handlePeriskopeSend(request, env, corsHeaders);
       if (url.pathname === '/periskope/messages') return handlePeriskopeMessages(request, env, corsHeaders);
+      if (url.pathname === '/periskope/delete') return handlePeriskopeDelete(request, env, corsHeaders);
       if (url.pathname === '/anthropic/messages') return handleAnthropic(request, env, corsHeaders);
       if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, ctx, corsHeaders);
       if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
@@ -302,6 +303,51 @@ async function handlePeriskopeMessages(request, env, corsHeaders) {
   });
   const text = await res.text();
   return new Response(text, { status: res.status, headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' } });
+}
+
+async function handlePeriskopeDelete(request, env, corsHeaders) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  const cfg = periskopeConfig(env);
+  if (cfg.error) return json({ error: cfg.error }, corsHeaders, 500);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON body' }, corsHeaders, 400); }
+  const messageId = body.message_id;
+  if (!messageId) return json({ error: 'message_id is required' }, corsHeaders, 400);
+
+  // Periskope: POST /message/{message_id}/delete → 204 on success
+  const res = await fetch(`${PERISKOPE_BASE}/message/${encodeURIComponent(messageId)}/delete`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${cfg.token}`,
+      'x-phone': cfg.phone,
+      'Content-Type': 'application/json',
+    },
+  });
+  const text = await res.text();
+
+  // Best-effort: log the deletion to the activity feed if we know the customer
+  if (res.ok && body.phone) {
+    const phoneKey = String(body.phone).replace(/[^\d]/g, '');
+    if (phoneKey) {
+      fbPush(`customers/${phoneKey}/activity`, {
+        ts: Date.now(),
+        direction: 'system',
+        source: 'manual',
+        action: 'message-deleted',
+        message: (body.preview || '').slice(0, 200),
+        message_id: messageId,
+      }).catch(() => {});
+    }
+  }
+
+  if (!res.ok) {
+    return new Response(text || JSON.stringify({ error: `Periskope delete ${res.status}` }), {
+      status: res.status,
+      headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
+    });
+  }
+  return json({ ok: true }, corsHeaders);
 }
 
 async function handleAnthropic(request, env, corsHeaders) {

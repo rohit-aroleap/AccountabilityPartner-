@@ -31,6 +31,27 @@ export async function listMessages(chatId, { limit = 50, offset = 0 } = {}) {
   return body;
 }
 
+export async function deleteMessage(messageId, { phone, preview } = {}) {
+  const base = workerBase();
+  const res = await fetch(`${base}/periskope/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message_id: messageId,
+      ...(phone ? { phone } : {}),
+      ...(preview ? { preview } : {}),
+    }),
+  });
+  const text = await res.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = { raw: text }; }
+  if (!res.ok) {
+    const msg = body.error || body.message || `HTTP ${res.status}`;
+    throw new Error(`Periskope delete failed: ${msg}`);
+  }
+  return body;
+}
+
 export async function sendMessage(chatId, message, { replyTo } = {}) {
   const base = workerBase();
   const res = await fetch(`${base}/periskope/send`, {

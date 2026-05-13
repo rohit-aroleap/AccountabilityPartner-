@@ -1,4 +1,4 @@
-import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
+import { phoneToChatId, listMessages, sendMessage, deleteMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
@@ -48,10 +48,47 @@ export function initChat() {
 }
 
 function onPaneClick(e) {
+  const delBtn = e.target.closest('.bubble-delete');
+  if (delBtn) {
+    e.stopPropagation();
+    const bubble = delBtn.closest('.bubble');
+    if (bubble?.dataset.messageId) {
+      handleDeleteBubble(bubble.dataset.messageId, bubble);
+    }
+    return;
+  }
   const badge = e.target.closest('.ai-badge');
   if (!badge) return;
   const bubble = badge.closest('.bubble');
   showAiBadgeDetails(bubble?.dataset.messageId);
+}
+
+async function handleDeleteBubble(messageId, bubbleEl) {
+  if (!activeCustomer) return;
+  const text = bubbleEl.querySelector('.bubble-text')?.textContent || '';
+  const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+  const ok = confirm(
+    `Delete this message from WhatsApp?\n\n"${preview}"\n\n` +
+    `The customer will see "This message was deleted". It will also be removed from the AI's context for future replies.`
+  );
+  if (!ok) return;
+
+  const delBtn = bubbleEl.querySelector('.bubble-delete');
+  if (delBtn) { delBtn.disabled = true; delBtn.textContent = '…'; }
+  try {
+    await deleteMessage(messageId, {
+      phone: activeCustomer.phone,
+      preview: text.slice(0, 200),
+    });
+    // Visually mark the bubble as deleted right away — full refresh follows shortly
+    bubbleEl.classList.add('deleted');
+    const textEl = bubbleEl.querySelector('.bubble-text');
+    if (textEl) textEl.innerHTML = '<em style="opacity:0.6;">🗑 deleted — removing from view…</em>';
+    setTimeout(() => refreshMessages({ scroll: false }), 1500);
+  } catch (err) {
+    if (delBtn) { delBtn.disabled = false; delBtn.textContent = '🗑'; }
+    alert(`Delete failed: ${err.message}\n\nPeriskope may only allow deleting messages sent within the last ~2 days, or the message may already be gone.`);
+  }
 }
 
 function showAiBadgeDetails(messageId) {
@@ -689,8 +726,12 @@ function renderBubble(m) {
   const ts = formatTime(m.timestamp);
   const body = m.body || mediaLabel(m);
   const aiBadge = m.from_me ? '' : renderAiBadge(m.message_id);
+  const deleteBtn = (m.from_me && m.message_id)
+    ? `<button type="button" class="bubble-delete" title="Delete this message from WhatsApp (and from AI context)">🗑</button>`
+    : '';
   return `
     <div class="bubble ${cls}" data-message-id="${escapeAttr(m.message_id || '')}">
+      ${deleteBtn}
       <div class="bubble-text">${escapeHtml(body)}</div>
       <div class="bubble-meta">${escapeHtml(ts)}</div>
       ${aiBadge}
