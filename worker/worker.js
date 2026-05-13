@@ -603,15 +603,21 @@ async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text
     // coach AI doesn't see the questionnaire Q&A (bare "1", "2", "3" replies) as recent
     // chat context — that historically confused the model into generating weird drafts
     // referencing "stray numbers" etc.
-    await fbPatch(`customers/${phoneKey}/config`, {
+    // Also default autoCoachMode to 'draft-only' if not yet set, so post-onboarding coach
+    // replies actually flow through (operator can switch to auto-send per customer).
+    const completionPatch = {
       onboardingState: 'complete',
       onboardingCompletedAt: Date.now(),
       coachPersonality: mapped.personality,
       coachIntensity: mapped.intensity,
       coachLanguage: mapped.language,
       coachGenderPref: mapped.genderPref,
-      conversationStartTs: Date.now() + 5000, // tiny buffer past the wrap-up send
-    });
+      conversationStartTs: Date.now() + 5000,
+    };
+    if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) {
+      completionPatch.autoCoachMode = 'draft-only';
+    }
+    await fbPatch(`customers/${phoneKey}/config`, completionPatch);
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'system', source: 'onboarding',
       action: 'completed', message: `personality=${mapped.personality} intensity=${mapped.intensity} lang=${mapped.language}`,
@@ -779,7 +785,12 @@ async function processInboundReply(env, payload) {
 
   const config = await fbGet(`customers/${phoneKey}/config`);
   if (!config) return { ignored: 'no-config-for-customer' };
-  if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) return { ignored: 'mode-off' };
+  // Onboarding messages must process even when autoCoachMode is off/unset — otherwise the
+  // customer's answers fall into the void and the questionnaire can never advance.
+  const isOnboardingActive = typeof config.onboardingState === 'string' && config.onboardingState.startsWith('awaiting-');
+  if (!isOnboardingActive && !['draft-only', 'auto-send'].includes(config.autoCoachMode)) {
+    return { ignored: 'mode-off' };
+  }
 
   if (data.message_id && data.message_id === config.lastInboundMessageId) {
     return { ignored: 'duplicate' };

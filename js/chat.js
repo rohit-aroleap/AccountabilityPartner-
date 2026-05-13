@@ -411,6 +411,18 @@ function computeNextUp(config, reminders, customer) {
   if (config.paused) {
     return `<span class="nu-icon">⏸</span><span class="nu-text">Customer paused — no automated sends${config.pausedReason ? ' · ' + escapeHtml(config.pausedReason) : ''}</span>`;
   }
+  // Onboarding in progress — overrides "AI is off" since the worker bypasses the mode-off check
+  if (typeof config.onboardingState === 'string' && config.onboardingState.startsWith('awaiting-')) {
+    const stepLabels = {
+      'awaiting-goal': 'Goal (1/6)',
+      'awaiting-age': 'Age (2/6)',
+      'awaiting-gender': 'Coach gender (3/6)',
+      'awaiting-style': 'Coach style (4/6)',
+      'awaiting-intensity': 'Intensity (5/6)',
+      'awaiting-language': 'Language (6/6)',
+    };
+    return `<span class="nu-icon">📝</span><span class="nu-text">Onboarding in progress — ${escapeHtml(stepLabels[config.onboardingState] || config.onboardingState)}. Customer is answering questions; coach AI is paused.</span>`;
+  }
   if (!['draft-only', 'auto-send'].includes(config.autoCoachMode)) {
     return `<span class="nu-icon">○</span><span class="nu-text">AI is off for this customer — turn on in ⚙</span>`;
   }
