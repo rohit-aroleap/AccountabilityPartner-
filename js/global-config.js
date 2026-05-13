@@ -41,6 +41,15 @@ export function onConfigUpdate(fn) {
   return () => listeners.delete(fn);
 }
 
+function mergePersonalities(cfg) {
+  const out = {};
+  for (const key of Object.keys(DEFAULT_GLOBAL.personalities)) {
+    const incoming = cfg?.[key];
+    out[key] = (typeof incoming === 'string' && incoming.trim()) ? incoming : DEFAULT_GLOBAL.personalities[key];
+  }
+  return out;
+}
+
 function mergeWithDefaults(cfg) {
   return {
     killSwitch: cfg?.killSwitch === true,
@@ -57,6 +66,7 @@ function mergeWithDefaults(cfg) {
       ? cfg.introMessageGym : DEFAULT_GLOBAL.introMessageGym,
     personaMale: (typeof cfg?.personaMale === 'string' && cfg.personaMale.trim()) || DEFAULT_GLOBAL.personaMale,
     personaFemale: (typeof cfg?.personaFemale === 'string' && cfg.personaFemale.trim()) || DEFAULT_GLOBAL.personaFemale,
+    personalities: mergePersonalities(cfg?.personalities),
     safety: { ...DEFAULT_GLOBAL.safety, ...(cfg?.safety || {}) },
   };
 }

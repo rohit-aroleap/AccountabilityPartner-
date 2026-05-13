@@ -1,6 +1,6 @@
 import { loadGlobalConfig, saveGlobalConfig, getCachedGlobalConfig } from './global-config.js';
 import { backfillWebhookFeeds } from './firebase-db.js';
-import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE, DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM } from './defaults.js';
+import { DEFAULT_GLOBAL, DEFAULT_SYSTEM_COACH, DEFAULT_SYSTEM_REPLY, DEFAULT_SYSTEM_GYM_COACH, DEFAULT_SAFETY, DEFAULT_INTRO_MESSAGE, DEFAULT_INTRO_MESSAGE_FERRA, DEFAULT_INTRO_MESSAGE_GYM, DEFAULT_PERSONALITIES, PERSONALITY_LABELS } from './defaults.js';
 import { parseCustomerPhones, loadSettings } from './storage.js';
 import { subscribeAiUsage } from './firebase-db.js';
 import { loadWorkoutData, normalizePhone, getRecentDailyActivity } from './workout.js';
@@ -27,6 +27,14 @@ export function initTuneAi() {
   document.getElementById('tune-reset-intro-ferra').addEventListener('click', () => resetField('intro-ferra'));
   document.getElementById('tune-reset-intro-gym').addEventListener('click', () => resetField('intro-gym'));
   document.getElementById('tune-backfill').addEventListener('click', runBackfill);
+  modalEl.querySelectorAll('[data-reset-personality]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.resetPersonality;
+      const f = document.getElementById('tune-form');
+      const ta = f[`personality_${key}`];
+      if (ta) ta.value = DEFAULT_PERSONALITIES[key];
+    });
+  });
   document.getElementById('tune-sandbox-run').addEventListener('click', runSandbox);
   modalEl.querySelectorAll('.tune-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -108,6 +116,10 @@ function hydrateForm() {
   f.gym.value = working.prompts.gym;
   f.introMessageFerra.value = working.introMessageFerra || DEFAULT_INTRO_MESSAGE_FERRA;
   f.introMessageGym.value = working.introMessageGym || DEFAULT_INTRO_MESSAGE_GYM;
+  for (const key of Object.keys(DEFAULT_PERSONALITIES)) {
+    const ta = f[`personality_${key}`];
+    if (ta) ta.value = (working.personalities && working.personalities[key]) || DEFAULT_PERSONALITIES[key];
+  }
   for (const k of Object.keys(DEFAULT_SAFETY)) {
     if (f[k]) f[k].value = working.safety[k];
   }
@@ -135,6 +147,9 @@ async function onSave(e) {
     },
     introMessageFerra: (data.get('introMessageFerra') || '').trim() || DEFAULT_INTRO_MESSAGE_FERRA,
     introMessageGym: (data.get('introMessageGym') || '').trim() || DEFAULT_INTRO_MESSAGE_GYM,
+    personalities: Object.fromEntries(Object.keys(DEFAULT_PERSONALITIES).map(key => [
+      key, (data.get(`personality_${key}`) || '').trim() || DEFAULT_PERSONALITIES[key]
+    ])),
     safety: {
       quietHoursStart: (data.get('quietHoursStart') || '21:00').trim(),
       quietHoursEnd: (data.get('quietHoursEnd') || '08:00').trim(),
@@ -231,6 +246,7 @@ function buildModalHtml() {
         <button type="button" class="tune-tab-btn" data-tab="safety">Safety</button>
         <button type="button" class="tune-tab-btn" data-tab="killswitch">Kill Switch</button>
         <button type="button" class="tune-tab-btn" data-tab="sandbox">Sandbox</button>
+        <button type="button" class="tune-tab-btn" data-tab="personalities">Personalities</button>
         <button type="button" class="tune-tab-btn" data-tab="usage">Usage</button>
         <button type="button" class="tune-tab-btn" data-tab="maintenance">Maintenance</button>
         <button type="button" class="tune-tab-btn" data-tab="best-practices">Best Practices</button>
@@ -367,6 +383,19 @@ function buildModalHtml() {
           <div class="tune-pane" data-pane="usage">
             <p class="tune-blurb">Anthropic API usage tracked per IST date. Rough cost is computed assuming Opus 4 pricing (input $15/M, output $75/M). Switch model in Settings — actual model pricing may differ.</p>
             <div id="tune-usage" class="tune-usage">Loading…</div>
+          </div>
+
+          <div class="tune-pane" data-pane="personalities">
+            <p class="tune-blurb">9 coach personalities. Each one becomes the system prompt for customers who pick the matching style during onboarding (Q4). Placeholders <code>{{personaName}}</code>, <code>{{intensity}}</code>, <code>{{language}}</code> get filled in per customer at message time. The intensity 1-5 lets each personality stretch from gentle to sharp without writing five separate prompts.</p>
+            ${Object.keys(DEFAULT_PERSONALITIES).map(key => `
+              <div class="field">
+                <div class="field-label-row">
+                  <label for="tune-persona-${key}">${escapeHtml(PERSONALITY_LABELS[key] || key)}</label>
+                  <button type="button" class="link-btn" data-reset-personality="${key}">Reset to default</button>
+                </div>
+                <textarea id="tune-persona-${key}" name="personality_${key}" rows="10" spellcheck="false"></textarea>
+              </div>
+            `).join('')}
           </div>
 
           <div class="tune-pane" data-pane="maintenance">
