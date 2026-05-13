@@ -355,6 +355,12 @@ async function processWebhookInBackground(env, payload, t0, rawPreview) {
     errorMsg = err.message;
     result = { error: err.message };
   }
+  // Suppress duplicate webhook entries from the visible automation feed — they're noise
+  // that confuses the per-message badge (the real processing entry is what matters).
+  // We still return the result to the caller; just don't write a separate feed entry.
+  if (result?.ignored === 'duplicate' && !errorMsg) {
+    return;
+  }
   const debugPrompt = result?.debugPrompt;
   const customerType = result?.debugCustomerType;
   const systemPromptType = result?.debugSystemType;
@@ -548,6 +554,10 @@ async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text
 
   if (nextState === 'complete') {
     const mapped = mapAnswersToPersonality(answers);
+    // Reset conversationStartTs to AFTER the onboarding wrap-up so the post-onboarding
+    // coach AI doesn't see the questionnaire Q&A (bare "1", "2", "3" replies) as recent
+    // chat context — that historically confused the model into generating weird drafts
+    // referencing "stray numbers" etc.
     await fbPatch(`customers/${phoneKey}/config`, {
       onboardingState: 'complete',
       onboardingCompletedAt: Date.now(),
@@ -555,6 +565,7 @@ async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text
       coachIntensity: mapped.intensity,
       coachLanguage: mapped.language,
       coachGenderPref: mapped.genderPref,
+      conversationStartTs: Date.now() + 5000, // tiny buffer past the wrap-up send
     });
     await fbPush(`customers/${phoneKey}/activity`, {
       ts: Date.now(), direction: 'system', source: 'onboarding',
@@ -1794,7 +1805,7 @@ async function fbPushAndGetKey(path, value) {
   return body.name;
 }
 
-async function sendOrHold(env, phoneKey, chatId, message, source, holdMs = 10000) {
+async function sendOrHold(env, phoneKey, chatId, message, source, holdMs = 5000) {
   const holdId = await fbPushAndGetKey(`customers/${phoneKey}/holdQueue`, {
     ts: Date.now(),
     message,

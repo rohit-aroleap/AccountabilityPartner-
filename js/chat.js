@@ -712,8 +712,18 @@ function renderAiBadge(messageId) {
     cls = 'ok'; text = 'AI: ✓ replied'; tooltip = 'Auto-sent via Periskope';
   } else if (r.acted === 'drafted') {
     cls = 'ok'; text = 'AI: drafted'; tooltip = 'Draft queued — review in composer';
+  } else if (r.acted === 'held') {
+    cls = 'warn'; text = 'AI: held'; tooltip = 'You clicked Hold — message converted to a pending draft';
   } else if (r.acted === 'auto-paused') {
     cls = 'warn'; text = 'AI: paused customer'; tooltip = 'Opt-out keyword detected';
+  } else if (r.acted === 'onboarding-advanced') {
+    cls = 'ok'; text = `AI: onboarding · next: ${escapeHtml((r.nextState || '').replace('awaiting-', ''))}`; tooltip = 'Answer parsed; next question sent';
+  } else if (r.acted === 'onboarding-complete') {
+    cls = 'ok'; text = 'AI: onboarding done'; tooltip = `Personality assigned: ${escapeHtml(r.personality || '')}`;
+  } else if (r.acted === 'onboarding-skipped') {
+    cls = 'warn'; text = 'AI: onboarding skipped'; tooltip = 'Customer typed "skip" — defaults applied';
+  } else if (r.ignored === 'unparseable-answer') {
+    cls = 'skip'; text = `AI: onboarding · nudged`; tooltip = `Answer couldn't be parsed (${r.reason || 'unclear'}) — nudge sent`;
   } else if (r.ignored === 'wrong-event') {
     cls = 'skip';
     const got = r.got || ev.event || '(missing)';
