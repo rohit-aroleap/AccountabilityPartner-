@@ -211,7 +211,6 @@ export default {
       if (url.pathname === '/workout' || url.pathname === '/workout/') return handleWorkout(request, env, corsHeaders);
       if (url.pathname === '/periskope/send') return handlePeriskopeSend(request, env, corsHeaders);
       if (url.pathname === '/periskope/messages') return handlePeriskopeMessages(request, env, corsHeaders);
-      if (url.pathname === '/periskope/delete') return handlePeriskopeDelete(request, env, corsHeaders);
       if (url.pathname === '/anthropic/messages') return handleAnthropic(request, env, corsHeaders);
       if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, ctx, corsHeaders);
       if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
@@ -303,51 +302,6 @@ async function handlePeriskopeMessages(request, env, corsHeaders) {
   });
   const text = await res.text();
   return new Response(text, { status: res.status, headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' } });
-}
-
-async function handlePeriskopeDelete(request, env, corsHeaders) {
-  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
-  const cfg = periskopeConfig(env);
-  if (cfg.error) return json({ error: cfg.error }, corsHeaders, 500);
-
-  let body;
-  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON body' }, corsHeaders, 400); }
-  const messageId = body.message_id;
-  if (!messageId) return json({ error: 'message_id is required' }, corsHeaders, 400);
-
-  // Periskope: POST /message/{message_id}/delete → 204 on success
-  const res = await fetch(`${PERISKOPE_BASE}/message/${encodeURIComponent(messageId)}/delete`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${cfg.token}`,
-      'x-phone': cfg.phone,
-      'Content-Type': 'application/json',
-    },
-  });
-  const text = await res.text();
-
-  // Best-effort: log the deletion to the activity feed if we know the customer
-  if (res.ok && body.phone) {
-    const phoneKey = String(body.phone).replace(/[^\d]/g, '');
-    if (phoneKey) {
-      fbPush(`customers/${phoneKey}/activity`, {
-        ts: Date.now(),
-        direction: 'system',
-        source: 'manual',
-        action: 'message-deleted',
-        message: (body.preview || '').slice(0, 200),
-        message_id: messageId,
-      }).catch(() => {});
-    }
-  }
-
-  if (!res.ok) {
-    return new Response(text || JSON.stringify({ error: `Periskope delete ${res.status}` }), {
-      status: res.status,
-      headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
-    });
-  }
-  return json({ ok: true }, corsHeaders);
 }
 
 async function handleAnthropic(request, env, corsHeaders) {
@@ -939,8 +893,9 @@ async function processInboundReply(env, payload) {
   const user = findUserInWorkout(workout, phoneKey);
   const customerType = resolveCustomerType(config, user);
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
+  const excludedIds = await fetchExcludedMessageIds(phoneKey);
   let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
-  messages = filterByConversationStart(messages, config?.conversationStartTs);
+  messages = filterMessagesForAi(messages, { startTs: config?.conversationStartTs, excludedIds });
 
   let userPrompt;
   if (customerType === 'gym') {
@@ -1262,7 +1217,8 @@ async function fireScheduledReminder(env, phoneKey, rid, rem, config, global, is
     const resp = await fetchPeriskopeMessages(env, chatId, 50);
     messages = (resp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
   } catch {}
-  messages = filterByConversationStart(messages, config?.conversationStartTs);
+  const excludedIdsCron = await fetchExcludedMessageIds(phoneKey);
+  messages = filterMessagesForAi(messages, { startTs: config?.conversationStartTs, excludedIds: excludedIdsCron });
 
   let basePrompt;
   if (customerType === 'gym') {
@@ -1437,8 +1393,9 @@ async function processCustomer(env, phoneKey, config, workout, ist, today, globa
   const customerType = resolveCustomerType(config, user);
 
   const messagesResp = await fetchPeriskopeMessages(env, chatId, 50);
+  const excludedIdsScheduled = await fetchExcludedMessageIds(phoneKey);
   let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
-  messages = filterByConversationStart(messages, config?.conversationStartTs);
+  messages = filterMessagesForAi(messages, { startTs: config?.conversationStartTs, excludedIds: excludedIdsScheduled });
 
   let userPrompt;
   if (customerType === 'gym') {
@@ -1705,9 +1662,30 @@ function buildCronCheckinPrompt({ phone, user, raw, messages, istNow }) {
   return lines.join('\n');
 }
 
+function filterMessagesForAi(messages, { startTs, excludedIds } = {}) {
+  const list = messages || [];
+  const excluded = excludedIds instanceof Set ? excludedIds : new Set(excludedIds || []);
+  return list.filter(m => {
+    if (m.message_id && excluded.has(m.message_id)) return false;
+    if (startTs && tsMs(m.timestamp) < startTs) return false;
+    return true;
+  });
+}
+
+// Backwards-compat alias — older call sites used this name
 function filterByConversationStart(messages, startTs) {
-  if (!startTs) return messages;
-  return (messages || []).filter(m => tsMs(m.timestamp) >= startTs);
+  return filterMessagesForAi(messages, { startTs });
+}
+
+async function fetchExcludedMessageIds(phoneKey) {
+  try {
+    const data = await fbGet(`customers/${phoneKey}/excludedMessageIds`);
+    if (!data) return new Set();
+    // Stored as { <messageId>: { ts, preview, ... } } — keys are the IDs
+    return new Set(Object.keys(data));
+  } catch {
+    return new Set();
+  }
 }
 
 function resolveCustomerType(config, ferraUser) {

@@ -29,8 +29,8 @@ export function resolveCustomerType(customer, config) {
 export const SYSTEM_COACH = DEFAULT_SYSTEM_COACH;
 export const SYSTEM_REPLY = DEFAULT_SYSTEM_REPLY;
 
-export async function buildDraftPrompt(customer, recentMessages, { intent, mode = 'coach', config = {}, workoutLog = [] } = {}) {
-  const filtered = filterByConversationStart(recentMessages, config?.conversationStartTs);
+export async function buildDraftPrompt(customer, recentMessages, { intent, mode = 'coach', config = {}, workoutLog = [], excludedIds = null } = {}) {
+  const filtered = filterMessagesForAi(recentMessages, { startTs: config?.conversationStartTs, excludedIds });
   const type = resolveCustomerType(customer, config);
   if (type === 'gym' && mode === 'coach') {
     return buildGymPrompt(customer, filtered, { intent, config, workoutLog });
@@ -38,9 +38,11 @@ export async function buildDraftPrompt(customer, recentMessages, { intent, mode 
   return buildFerraPrompt(customer, filtered, { intent, mode });
 }
 
-function filterByConversationStart(messages, startTs) {
-  if (!startTs) return messages;
+function filterMessagesForAi(messages, { startTs, excludedIds } = {}) {
+  const excluded = excludedIds instanceof Set ? excludedIds : new Set(excludedIds || []);
   return (messages || []).filter(m => {
+    if (m.message_id && excluded.has(m.message_id)) return false;
+    if (!startTs) return true;
     const ts = m.timestamp;
     if (!ts) return false;
     let ms;

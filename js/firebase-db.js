@@ -67,6 +67,47 @@ export async function deleteCustomerData(phone) {
   await remove(customerRef(phone, ''));
 }
 
+// --- Excluded message IDs (hide from AI context + chat view) ---
+// Stored as customers/<phoneKey>/excludedMessageIds/<messageId> = { ts, preview }
+// Note: Firebase keys can't contain "." or "$" or "#" or "[" or "]" — Periskope
+// message IDs use "_" so they're safe, but we sanitise just in case.
+function sanitiseMessageIdKey(id) {
+  return String(id || '').replace(/[.#$\[\]\/]/g, '_');
+}
+
+export async function addExcludedMessage(phone, messageId, { preview } = {}) {
+  const key = sanitiseMessageIdKey(messageId);
+  if (!key) throw new Error('messageId required');
+  await set(customerRef(phone, `/excludedMessageIds/${key}`), {
+    ts: Date.now(),
+    originalId: messageId,
+    preview: (preview || '').slice(0, 200),
+  });
+}
+
+export async function removeExcludedMessage(phone, messageId) {
+  const key = sanitiseMessageIdKey(messageId);
+  if (!key) return;
+  await remove(customerRef(phone, `/excludedMessageIds/${key}`));
+}
+
+export function subscribeExcludedMessages(phone, cb) {
+  const r = customerRef(phone, '/excludedMessageIds');
+  const handler = (snap) => {
+    const ids = new Set();
+    const meta = new Map();
+    snap.forEach(child => {
+      const v = child.val() || {};
+      const id = v.originalId || child.key;
+      ids.add(id);
+      meta.set(id, v);
+    });
+    cb(ids, meta);
+  };
+  onValue(r, handler);
+  return () => off(r, 'value', handler);
+}
+
 export async function backfillWebhookFeeds({ onLog, onProgress } = {}) {
   const log = onLog || (() => {});
   const progress = onProgress || (() => {});

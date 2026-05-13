@@ -1,8 +1,8 @@
-import { phoneToChatId, listMessages, sendMessage, deleteMessage } from './periskope.js';
+import { phoneToChatId, listMessages, sendMessage } from './periskope.js';
 import { generateMessage } from './anthropic.js';
 import { buildDraftPrompt, getSystemForCustomer } from './prompt.js';
 import { loadSettings } from './storage.js';
-import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder, subscribeHoldQueueForChat, markHoldHeld, logAiRating, subscribeConfig, subscribeScheduledReminders } from './firebase-db.js';
+import { readConfig, writeConfig, logActivity, subscribePendingDraft, clearPendingDraft, subscribeWebhookEventsForChat, addScheduledReminder, subscribeHoldQueueForChat, markHoldHeld, logAiRating, subscribeConfig, subscribeScheduledReminders, addExcludedMessage, removeExcludedMessage, subscribeExcludedMessages } from './firebase-db.js';
 import { getCachedGlobalConfig, subscribeGlobalConfig } from './global-config.js';
 import { ref, get, query, limitToLast } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, ROOT_PATH } from './firebase-init.js';
@@ -41,6 +41,8 @@ let activeReminders = [];
 let webhookEventsByMessageId = new Map();
 let replayedMessageIds = new Set();
 let webhookSubLoaded = false;
+let excludedMessageIds = new Set();
+let excludedUnsub = null;
 
 export function initChat() {
   els.pane = document.querySelector('.chat-pane');
@@ -48,13 +50,20 @@ export function initChat() {
 }
 
 function onPaneClick(e) {
-  const delBtn = e.target.closest('.bubble-delete');
-  if (delBtn) {
+  const hideBtn = e.target.closest('.bubble-hide');
+  if (hideBtn) {
     e.stopPropagation();
-    const bubble = delBtn.closest('.bubble');
+    const bubble = hideBtn.closest('.bubble');
     if (bubble?.dataset.messageId) {
-      handleDeleteBubble(bubble.dataset.messageId, bubble);
+      handleHideBubble(bubble.dataset.messageId, bubble);
     }
+    return;
+  }
+  const unhideBtn = e.target.closest('.bubble-unhide');
+  if (unhideBtn) {
+    e.stopPropagation();
+    const messageId = unhideBtn.dataset.messageId;
+    if (messageId) handleUnhideBubble(messageId);
     return;
   }
   const badge = e.target.closest('.ai-badge');
@@ -63,31 +72,39 @@ function onPaneClick(e) {
   showAiBadgeDetails(bubble?.dataset.messageId);
 }
 
-async function handleDeleteBubble(messageId, bubbleEl) {
+async function handleHideBubble(messageId, bubbleEl) {
   if (!activeCustomer) return;
   const text = bubbleEl.querySelector('.bubble-text')?.textContent || '';
-  const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
-  const ok = confirm(
-    `Delete this message from WhatsApp?\n\n"${preview}"\n\n` +
-    `The customer will see "This message was deleted". It will also be removed from the AI's context for future replies.`
-  );
-  if (!ok) return;
-
-  const delBtn = bubbleEl.querySelector('.bubble-delete');
-  if (delBtn) { delBtn.disabled = true; delBtn.textContent = '…'; }
+  const hideBtn = bubbleEl.querySelector('.bubble-hide');
+  if (hideBtn) { hideBtn.disabled = true; hideBtn.textContent = '…'; }
   try {
-    await deleteMessage(messageId, {
-      phone: activeCustomer.phone,
-      preview: text.slice(0, 200),
-    });
-    // Visually mark the bubble as deleted right away — full refresh follows shortly
-    bubbleEl.classList.add('deleted');
-    const textEl = bubbleEl.querySelector('.bubble-text');
-    if (textEl) textEl.innerHTML = '<em style="opacity:0.6;">🗑 deleted — removing from view…</em>';
-    setTimeout(() => refreshMessages({ scroll: false }), 1500);
+    await addExcludedMessage(activeCustomer.phone, messageId, { preview: text });
+    await logActivity(activeCustomer.phone, {
+      direction: 'system',
+      source: 'manual',
+      action: 'message-hidden-from-ai',
+      message: text.slice(0, 200),
+      message_id: messageId,
+    }).catch(() => {});
+    // The subscribe handler will re-render automatically; no need to refresh here
   } catch (err) {
-    if (delBtn) { delBtn.disabled = false; delBtn.textContent = '🗑'; }
-    alert(`Delete failed: ${err.message}\n\nPeriskope may only allow deleting messages sent within the last ~2 days, or the message may already be gone.`);
+    if (hideBtn) { hideBtn.disabled = false; hideBtn.textContent = '🚫'; }
+    alert(`Hide failed: ${err.message}`);
+  }
+}
+
+async function handleUnhideBubble(messageId) {
+  if (!activeCustomer) return;
+  try {
+    await removeExcludedMessage(activeCustomer.phone, messageId);
+    await logActivity(activeCustomer.phone, {
+      direction: 'system',
+      source: 'manual',
+      action: 'message-unhidden',
+      message_id: messageId,
+    }).catch(() => {});
+  } catch (err) {
+    alert(`Unhide failed: ${err.message}`);
   }
 }
 
@@ -173,6 +190,7 @@ export async function openChatFor(customer) {
   if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
   if (configUnsub) { configUnsub(); configUnsub = null; }
   if (remindersUnsub) { remindersUnsub(); remindersUnsub = null; }
+  if (excludedUnsub) { excludedUnsub(); excludedUnsub = null; }
   if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
   if (nextUpTimer) { clearInterval(nextUpTimer); nextUpTimer = null; }
   activeCustomer = customer;
@@ -185,6 +203,7 @@ export async function openChatFor(customer) {
   webhookEventsByMessageId = new Map();
   replayedMessageIds = new Set();
   webhookSubLoaded = false;
+  excludedMessageIds = new Set();
   renderShell(customer);
   await refreshMessages({ scroll: true });
   startPolling();
@@ -193,6 +212,7 @@ export async function openChatFor(customer) {
   holdQueueUnsub = subscribeHoldQueueForChat(customer.phone, onHoldQueueChange);
   configUnsub = subscribeConfig(customer.phone, onConfigChange);
   remindersUnsub = subscribeScheduledReminders(customer.phone, 20, onRemindersChange);
+  excludedUnsub = subscribeExcludedMessages(customer.phone, onExcludedChange);
   nextUpTimer = setInterval(renderNextUpBanner, 30_000);
 }
 
@@ -203,6 +223,7 @@ export function closeChat() {
   if (holdQueueUnsub) { holdQueueUnsub(); holdQueueUnsub = null; }
   if (configUnsub) { configUnsub(); configUnsub = null; }
   if (remindersUnsub) { remindersUnsub(); remindersUnsub = null; }
+  if (excludedUnsub) { excludedUnsub(); excludedUnsub = null; }
   if (holdCountdownTimer) { clearInterval(holdCountdownTimer); holdCountdownTimer = null; }
   if (nextUpTimer) { clearInterval(nextUpTimer); nextUpTimer = null; }
   activeChatId = null;
@@ -214,6 +235,13 @@ export function closeChat() {
   activeReminders = [];
   webhookEventsByMessageId = new Map();
   replayedMessageIds = new Set();
+  excludedMessageIds = new Set();
+}
+
+function onExcludedChange(ids) {
+  excludedMessageIds = ids || new Set();
+  // Re-render messages to show/hide excluded bubbles
+  if (activeChatId) refreshMessages({ scroll: false }).catch(() => {});
 }
 
 function onConfigChange(config) {
@@ -725,13 +753,27 @@ function renderBubble(m) {
   const cls = m.from_me ? 'out' : 'in';
   const ts = formatTime(m.timestamp);
   const body = m.body || mediaLabel(m);
+
+  // Excluded — render a collapsed placeholder with undo
+  if (m.message_id && excludedMessageIds.has(m.message_id)) {
+    const preview = (body || '').slice(0, 60) + ((body || '').length > 60 ? '…' : '');
+    return `
+      <div class="bubble ${cls} hidden-from-ai" data-message-id="${escapeAttr(m.message_id)}">
+        <div class="bubble-hidden-note">
+          🚫 Hidden from AI · "${escapeHtml(preview)}"
+          <button type="button" class="bubble-unhide" data-message-id="${escapeAttr(m.message_id)}" title="Restore this message to the AI's context">undo</button>
+        </div>
+      </div>
+    `;
+  }
+
   const aiBadge = m.from_me ? '' : renderAiBadge(m.message_id);
-  const deleteBtn = (m.from_me && m.message_id)
-    ? `<button type="button" class="bubble-delete" title="Delete this message from WhatsApp (and from AI context)">🗑</button>`
+  const hideBtn = m.message_id
+    ? `<button type="button" class="bubble-hide" title="Hide this message from the AI's context (also hides from this view)">🚫</button>`
     : '';
   return `
     <div class="bubble ${cls}" data-message-id="${escapeAttr(m.message_id || '')}">
-      ${deleteBtn}
+      ${hideBtn}
       <div class="bubble-text">${escapeHtml(body)}</div>
       <div class="bubble-meta">${escapeHtml(ts)}</div>
       ${aiBadge}
@@ -948,7 +990,7 @@ async function onDraft(mode) {
     const { anthropicModel } = loadSettings();
     const config = (await readConfig(activeCustomer.phone)) || {};
     const workoutLog = await loadRecentWorkoutLog(activeCustomer.phone);
-    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode, config, workoutLog });
+    const userPrompt = await buildDraftPrompt(activeCustomer, currentMessages, { intent, mode, config, workoutLog, excludedIds: excludedMessageIds });
     const draft = await generateMessage({
       system: getSystemForCustomer(activeCustomer, mode, config),
       userPrompt,
