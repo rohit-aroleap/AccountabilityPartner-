@@ -216,6 +216,23 @@ async function onSave(e) {
     status.textContent = `Added ${normPhone}.`;
   }
 
+  // Kick off in-chat onboarding flow if not skipped — worker waits 10s, then sends Q1
+  if (!skipOnboarding && sendIntro && introMessage) {
+    try {
+      const settings = (await import('./storage.js')).loadSettings();
+      const workerUrl = settings.workerUrl;
+      if (workerUrl) {
+        await fetch(`${workerUrl.replace(/\/+$/, '')}/onboarding/begin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: normPhone, delayMs: 10000 }),
+        });
+      }
+    } catch (err) {
+      console.error('onboarding/begin call failed:', err);
+    }
+  }
+
   // Reset edit flag for next use
   const ta = document.getElementById('ac-introMessage');
   delete ta.dataset.userEdited;

@@ -42,6 +42,89 @@ const OPT_OUT_KEYWORDS = [
   'leave me alone', 'mat karo', 'mat bhejo', 'band karo', 'stop', 'pause',
 ];
 
+// Onboarding questions, in order. Each question maps to a state name + next state.
+const ONBOARDING_QUESTIONS = {
+  goal: {
+    label: 'Goal',
+    state: 'awaiting-goal',
+    nextState: 'awaiting-age',
+    options: ['Lose weight', 'Get toned', 'Build muscle', 'Improve health & longevity', 'Train as an athlete or competitor', 'Not sure'],
+  },
+  age: {
+    label: 'Age',
+    state: 'awaiting-age',
+    nextState: 'awaiting-gender',
+    options: ['17 or younger', '18-29', '30-39', '40-49', '50-59', '60 or older'],
+  },
+  gender: {
+    label: 'Coach gender preference',
+    state: 'awaiting-gender',
+    nextState: 'awaiting-style',
+    options: ['Female', 'Male', 'No preference'],
+  },
+  style: {
+    label: 'Coach style',
+    state: 'awaiting-style',
+    nextState: 'awaiting-intensity',
+    options: ['High-energy', 'Knows when to give me tough love', 'Calm, cool and collected', 'Always Positive', 'Drill sergeant', 'Has a sense of humor', 'Analytical and results-driven', 'Strictly business', 'Goes the extra mile to personalize my workouts'],
+  },
+  intensity: {
+    label: 'Coach intensity',
+    state: 'awaiting-intensity',
+    nextState: 'awaiting-language',
+    options: ['Not intense', 'A little intense', 'Somewhat intense', 'Intense', 'Very intense'],
+  },
+  language: {
+    label: 'Language preference',
+    state: 'awaiting-language',
+    nextState: 'complete',
+    options: ['English', 'Hindi', 'Both (Hinglish)'],
+  },
+};
+
+const ONBOARDING_QUESTION_ORDER = ['goal', 'age', 'gender', 'style', 'intensity', 'language'];
+
+const STATE_TO_QKEY = Object.fromEntries(
+  Object.entries(ONBOARDING_QUESTIONS).map(([k, v]) => [v.state, k])
+);
+
+const ONBOARDING_PROMPTS = {
+  goal: `Quick setup so I can coach you the right way — only 6 short questions, takes a minute.\n\nWhat's your top fitness goal?\n\n1. Lose weight\n2. Get toned\n3. Build muscle\n4. Improve health & longevity\n5. Train as an athlete or competitor\n6. Not sure\n\nReply with just the number.`,
+  age: `Got it. Q2 of 6 — what's your age range?\n\n1. 17 or younger\n2. 18-29\n3. 30-39\n4. 40-49\n5. 50-59\n6. 60 or older`,
+  gender: `Q3 of 6 — would you prefer a male or female coach?\n\n1. Female\n2. Male\n3. No preference`,
+  style: `Q4 of 6 — pick the coach style that fits you best:\n\n1. High-energy\n2. Knows when to give me tough love\n3. Calm, cool and collected\n4. Always Positive\n5. Drill sergeant\n6. Has a sense of humor\n7. Analytical and results-driven\n8. Strictly business\n9. Goes the extra mile to personalize my workouts`,
+  intensity: `Q5 of 6 — what level of intensity do you want from your coach?\n\n1. Not intense\n2. A little intense\n3. Somewhat intense\n4. Intense\n5. Very intense`,
+  language: `Last one — what language do you prefer?\n\n1. English\n2. Hindi\n3. Both (Hinglish)`,
+};
+
+const ONBOARDING_WRAPUP = `All set 🙌 Your coach is dialed in. I'll check in tomorrow morning — talk soon.`;
+
+const INTENSITY_TO_NUMBER = {
+  'Not intense': 1,
+  'A little intense': 2,
+  'Somewhat intense': 3,
+  'Intense': 4,
+  'Very intense': 5,
+};
+
+const LANGUAGE_LABELS = {
+  'English': 'English',
+  'Hindi': 'Hindi',
+  'Both (Hinglish)': 'Both (mix English and Hindi naturally)',
+};
+
+const STYLE_TO_PERSONALITY = {
+  'High-energy': 'highEnergy',
+  'Always Positive': 'cheerleader',
+  'Knows when to give me tough love': 'honest',
+  'Drill sergeant': 'drillSergeant',
+  'Calm, cool and collected': 'steady',
+  'Has a sense of humor': 'friend',
+  'Analytical and results-driven': 'analyst',
+  'Strictly business': 'pro',
+  'Goes the extra mile to personalize my workouts': 'personalTrainer',
+};
+
 const SYSTEM_COACH = `You are Rohit, founder of Ferra (a smart resistance-training machine). You run a personal WhatsApp accountability program for your customers. Every message you send moves them toward consistent training. This is not a generic chat — workouts are your mission.
 
 How to decide what to say:
@@ -121,6 +204,7 @@ export default {
       if (url.pathname === '/periskope/webhook') return handlePeriskopeWebhook(request, env, ctx, corsHeaders);
       if (url.pathname === '/periskope/webhook-setup') return handlePeriskopeWebhookSetup(request, env, corsHeaders);
       if (url.pathname === '/periskope/replay') return handlePeriskopeReplay(request, env, ctx, corsHeaders);
+      if (url.pathname === '/onboarding/begin') return handleOnboardingBegin(request, env, ctx, corsHeaders);
       if (url.pathname === '/cron/run') {
         const result = await runCron(env);
         return json({ ok: true, ...result }, corsHeaders);
@@ -324,6 +408,243 @@ async function handlePeriskopeReplay(request, env, ctx, corsHeaders) {
   return json({ ok: true, replayed: true }, corsHeaders);
 }
 
+async function handleOnboardingBegin(request, env, ctx, corsHeaders) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid JSON' }, corsHeaders, 400); }
+  const phone = body?.phone || '';
+  const phoneKey = String(phone).replace(/[^\d]/g, '');
+  if (!phoneKey) return json({ error: 'phone required' }, corsHeaders, 400);
+
+  const delayMs = Math.max(0, Math.min(parseInt(body?.delayMs, 10) || 10000, 25000));
+  ctx.waitUntil((async () => {
+    if (delayMs) await new Promise(r => setTimeout(r, delayMs));
+    try {
+      await startOnboarding(env, phoneKey);
+    } catch (err) {
+      console.error('startOnboarding failed:', err.message);
+    }
+  })());
+  return json({ ok: true, scheduledIn: delayMs }, corsHeaders);
+}
+
+async function startOnboarding(env, phoneKey) {
+  const config = await fbGet(`customers/${phoneKey}/config`);
+  if (!config) return;
+  if (config.onboardingState !== 'pending') return;
+  const global = await getGlobalConfig();
+  if (global.killSwitch) return;
+
+  const now = new Date();
+  const ist = istParts(now);
+
+  await fbPatch(`customers/${phoneKey}/config`, {
+    onboardingState: ONBOARDING_QUESTIONS.goal.state,
+    onboardingStartedAt: Date.now(),
+  });
+  await sendOnboardingMessage(env, phoneKey, 'goal', ist, global);
+}
+
+async function sendOnboardingMessage(env, phoneKey, qKey, ist, global) {
+  const text = ONBOARDING_PROMPTS[qKey];
+  if (!text) return;
+  if (inQuietHours(ist.hm, global.safety)) {
+    await fbPatch(`customers/${phoneKey}/config`, { onboardingPausedForQuiet: true });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'onboarding',
+      action: 'paused-quiet-hours', message: qKey,
+    });
+    return;
+  }
+  const chatId = `${phoneKey}@c.us`;
+  await sendViaPeriskope(env, chatId, text);
+  await fbPatch(`customers/${phoneKey}/config`, {
+    onboardingPausedForQuiet: null,
+    lastOutboundAt: Date.now(),
+  });
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'outbound', source: 'onboarding',
+    action: `question-sent-${qKey}`, message: text,
+  });
+}
+
+async function sendOnboardingWrapup(env, phoneKey, ist, global) {
+  if (inQuietHours(ist.hm, global.safety)) {
+    await fbPatch(`customers/${phoneKey}/config`, { onboardingWrapupPaused: true });
+    return;
+  }
+  const chatId = `${phoneKey}@c.us`;
+  await sendViaPeriskope(env, chatId, ONBOARDING_WRAPUP);
+  await fbPatch(`customers/${phoneKey}/config`, { onboardingWrapupPaused: null, lastOutboundAt: Date.now() });
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'outbound', source: 'onboarding',
+    action: 'wrapup-sent', message: ONBOARDING_WRAPUP,
+  });
+}
+
+async function handleOnboardingMessage(env, config, phoneKey, chatId, data, text, ist) {
+  const state = config.onboardingState;
+  const qKey = STATE_TO_QKEY[state];
+  if (!qKey) return { ignored: 'unknown-onboarding-state', state };
+
+  const trimmed = (text || '').toLowerCase().trim();
+  if (trimmed === 'skip' || trimmed === 'skip setup' || trimmed === 'skip onboarding') {
+    await fbPatch(`customers/${phoneKey}/config`, {
+      onboardingState: 'skipped',
+      onboardingSkippedAt: Date.now(),
+      lastInboundMessageId: data.message_id,
+      lastInboundAt: Date.now(),
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'onboarding', action: 'skipped-by-customer',
+    });
+    const global = await getGlobalConfig();
+    if (!inQuietHours(ist.hm, global.safety)) {
+      await sendViaPeriskope(env, chatId, `Got it — skipping setup. Just talk to me normally and we'll figure it out together.`);
+      await fbPatch(`customers/${phoneKey}/config`, { lastOutboundAt: Date.now() });
+    }
+    return { acted: 'onboarding-skipped' };
+  }
+
+  const question = ONBOARDING_QUESTIONS[qKey];
+  const parsed = await parseOnboardingAnswer(env, qKey, question, text);
+  if (!parsed.valid) {
+    const questionsAhead = ONBOARDING_QUESTION_ORDER.length - ONBOARDING_QUESTION_ORDER.indexOf(qKey);
+    const nudge = `Quick — ${questionsAhead} ${questionsAhead === 1 ? 'question' : 'questions'} left and we're set. We can chat after we finish.\n\n${ONBOARDING_PROMPTS[qKey]}`;
+    const global = await getGlobalConfig();
+    if (!inQuietHours(ist.hm, global.safety)) {
+      await sendViaPeriskope(env, chatId, nudge);
+      await fbPatch(`customers/${phoneKey}/config`, { lastOutboundAt: Date.now() });
+    }
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'onboarding',
+      action: 'unparseable-answer', message: text, reason: parsed.reason,
+    });
+    await fbPatch(`customers/${phoneKey}/config`, {
+      lastInboundMessageId: data.message_id,
+      lastInboundAt: Date.now(),
+    });
+    return { ignored: 'unparseable-answer', reason: parsed.reason };
+  }
+
+  // Save answer, advance state
+  const answers = { ...(config.onboardingAnswers || {}) };
+  answers[qKey] = parsed.value;
+  const nextState = question.nextState;
+
+  await fbPatch(`customers/${phoneKey}/config`, {
+    onboardingAnswers: answers,
+    onboardingState: nextState,
+    lastInboundMessageId: data.message_id,
+    lastInboundAt: Date.now(),
+  });
+  await fbPush(`customers/${phoneKey}/activity`, {
+    ts: Date.now(), direction: 'system', source: 'onboarding',
+    action: `answer-${qKey}`, message: parsed.value,
+  });
+
+  const global = await getGlobalConfig();
+
+  if (nextState === 'complete') {
+    const mapped = mapAnswersToPersonality(answers);
+    await fbPatch(`customers/${phoneKey}/config`, {
+      onboardingState: 'complete',
+      onboardingCompletedAt: Date.now(),
+      coachPersonality: mapped.personality,
+      coachIntensity: mapped.intensity,
+      coachLanguage: mapped.language,
+      coachGenderPref: mapped.genderPref,
+    });
+    await fbPush(`customers/${phoneKey}/activity`, {
+      ts: Date.now(), direction: 'system', source: 'onboarding',
+      action: 'completed', message: `personality=${mapped.personality} intensity=${mapped.intensity} lang=${mapped.language}`,
+    });
+    await sendOnboardingWrapup(env, phoneKey, ist, global);
+    return { acted: 'onboarding-complete', personality: mapped.personality };
+  }
+
+  const nextQKey = STATE_TO_QKEY[nextState];
+  if (nextQKey) await sendOnboardingMessage(env, phoneKey, nextQKey, ist, global);
+  return { acted: 'onboarding-advanced', nextState };
+}
+
+async function parseOnboardingAnswer(env, qKey, question, userText) {
+  if (!userText || userText.length < 1) return { valid: false, reason: 'empty' };
+  // Fast path: if it's just a number in range, accept
+  const numMatch = userText.trim().match(/^([0-9]+)$/);
+  if (numMatch) {
+    const n = parseInt(numMatch[1], 10);
+    if (n >= 1 && n <= question.options.length) {
+      return { valid: true, value: question.options[n - 1] };
+    }
+  }
+  const optionsList = question.options.map((opt, i) => `${i+1}. ${opt}`).join('\n');
+  const prompt = `Parse this WhatsApp reply against a multiple-choice question.
+
+Question: ${question.label}
+Options:
+${optionsList}
+
+Customer's reply: "${userText.slice(0, 300)}"
+
+Map the reply to ONE option (1-${question.options.length}) if clear. Be permissive — "1" or "first option" or "lose weight" or "the first one" all map to option 1. Match semantic intent ("I want to bulk up" → "Build muscle").
+
+Output ONLY JSON, no preamble:
+{ "valid": true, "choice": <1-${question.options.length}> }
+or
+{ "valid": false, "reason": "off-topic" | "no-match" | "ambiguous" }
+
+If the reply is off-topic (a question, complaint, unrelated chat) → valid: false, reason: "off-topic".
+If it doesn't match any option → valid: false, reason: "no-match".
+If genuinely ambiguous between options → valid: false, reason: "ambiguous".`;
+  let text;
+  try {
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 100);
+  } catch {
+    return { valid: false, reason: 'llm-error' };
+  }
+  if (!text) return { valid: false, reason: 'empty-llm-response' };
+  try {
+    const cleaned = text.trim().replace(/^```json\s*|\s*```$/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (parsed.valid && Number.isInteger(parsed.choice) && parsed.choice >= 1 && parsed.choice <= question.options.length) {
+      return { valid: true, value: question.options[parsed.choice - 1] };
+    }
+    return { valid: false, reason: parsed.reason || 'no-match' };
+  } catch {
+    return { valid: false, reason: 'parse-error' };
+  }
+}
+
+function mapAnswersToPersonality(answers) {
+  const personality = STYLE_TO_PERSONALITY[answers.style] || 'friend';
+  const intensity = INTENSITY_TO_NUMBER[answers.intensity] || 3;
+  const language = LANGUAGE_LABELS[answers.language] || 'English';
+  const genderPref = answers.gender === 'Female' ? 'Female' : (answers.gender === 'Male' ? 'Male' : 'NoPreference');
+  return { personality, intensity, language, genderPref };
+}
+
+function interpolatePersonality(template, config, global) {
+  const personaName = config.coachGenderPref === 'Female'
+    ? (global.personaFemale || 'Ashima')
+    : (global.personaMale || 'Rohit');
+  const intensity = config.coachIntensity || 3;
+  const language = config.coachLanguage || 'English';
+  return String(template)
+    .replace(/\{\{personaName\}\}/g, personaName)
+    .replace(/\{\{intensity\}\}/g, String(intensity))
+    .replace(/\{\{language\}\}/g, language);
+}
+
+function resolveSystemPrompt(config, global, customerType) {
+  if (config?.onboardingState === 'complete' && config.coachPersonality && global.personalities?.[config.coachPersonality]) {
+    return interpolatePersonality(global.personalities[config.coachPersonality], config, global);
+  }
+  if (customerType === 'gym') return global.prompts?.gym || SYSTEM_GYM_COACH;
+  return global.prompts?.coach || SYSTEM_COACH;
+}
+
 async function handlePeriskopeWebhookSetup(request, env, corsHeaders) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
   const cfg = periskopeConfig(env);
@@ -411,6 +732,13 @@ async function processInboundReply(env, payload) {
     message: text || `[${data.message_type || 'media'}]`,
   });
 
+  // Onboarding mode: route inbound to the questionnaire handler instead of the coach reply flow.
+  // Only customers with onboardingState in the awaiting-* family qualify; pending/complete/skipped pass through.
+  if (typeof config.onboardingState === 'string' && config.onboardingState.startsWith('awaiting-')) {
+    const ist = istParts(new Date());
+    return await handleOnboardingMessage(env, config, phoneKey, chatId, data, text, ist);
+  }
+
   if (text && detectOptOutKeywords(text)) {
     await fbPatch(`customers/${phoneKey}/config`, {
       paused: true,
@@ -463,17 +791,16 @@ async function processInboundReply(env, payload) {
   let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
   messages = filterByConversationStart(messages, config?.conversationStartTs);
 
-  let userPrompt, systemPrompt;
+  let userPrompt;
   if (customerType === 'gym') {
     const workoutLog = await fetchWorkoutLog(phoneKey, 20);
     userPrompt = buildGymPrompt({ phone: phoneKey, user, config, messages, istNow: ist, workoutLog, latestInbound: text, mode: 'reply' });
-    systemPrompt = global.prompts?.gym || SYSTEM_GYM_COACH;
   } else {
     userPrompt = buildReplyPrompt({
       phone: phoneKey, user, raw: workout, messages, istNow: ist, latestInbound: text,
     });
-    systemPrompt = global.prompts?.coach || SYSTEM_COACH;
   }
+  const systemPrompt = resolveSystemPrompt(config, global, customerType);
   const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
 
@@ -603,6 +930,13 @@ async function runCron(env) {
     }
   }
 
+  // Resume any onboarding flows that were paused by quiet hours
+  try {
+    await resumeOnboardingAfterQuietHours(env, customers, ist, global);
+  } catch (err) {
+    console.error('resumeOnboarding failed:', err.message);
+  }
+
   // After morning check-ins, seed automatic reminders and fire any due ones
   let seededCount = 0;
   let postWorkoutCount = 0;
@@ -628,6 +962,29 @@ async function runCron(env) {
 
   await logAutomation({ type: 'cron', processed, acted, skipped: skipped.slice(0, 10), now: ist.iso, remindersSeeded: seededCount, postWorkoutSeeded: postWorkoutCount, remindersFired: firedCount, firedDetail });
   return { processed, acted, skipped, now: ist.iso, remindersSeeded: seededCount, postWorkoutSeeded: postWorkoutCount, remindersFired: firedCount };
+}
+
+async function resumeOnboardingAfterQuietHours(env, customers, ist, global) {
+  if (inQuietHours(ist.hm, global.safety)) return; // still quiet, nothing to do
+  for (const [phoneKey, data] of Object.entries(customers)) {
+    const config = data?.config;
+    if (!config) continue;
+    // Wrap-up was paused
+    if (config.onboardingWrapupPaused && config.onboardingState === 'complete') {
+      await sendOnboardingWrapup(env, phoneKey, ist, global);
+      continue;
+    }
+    // Question was paused
+    if (config.onboardingPausedForQuiet) {
+      const state = config.onboardingState;
+      const qKey = STATE_TO_QKEY[state];
+      if (qKey) {
+        await sendOnboardingMessage(env, phoneKey, qKey, ist, global);
+      } else {
+        await fbPatch(`customers/${phoneKey}/config`, { onboardingPausedForQuiet: null });
+      }
+    }
+  }
 }
 
 async function seedPostWorkoutReminders(env, customers, ist, today) {
@@ -774,9 +1131,7 @@ async function fireScheduledReminder(env, phoneKey, rid, rem, config, global, is
     `Draft the message so it naturally references the reason. Do NOT mention that this was scheduled or that you set a reminder — the customer should just see a normal, well-timed message from you.`,
   ].join('\n');
   const userPrompt = basePrompt + '\n' + reminderTail;
-  const systemPrompt = customerType === 'gym'
-    ? (global.prompts?.gym || SYSTEM_GYM_COACH)
-    : (global.prompts?.coach || SYSTEM_COACH);
+  const systemPrompt = resolveSystemPrompt(config, global, customerType);
 
   const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft for reminder');
@@ -934,15 +1289,14 @@ async function processCustomer(env, phoneKey, config, workout, ist, today, globa
   let messages = (messagesResp.messages || []).slice().sort((a, b) => tsMs(a.timestamp) - tsMs(b.timestamp));
   messages = filterByConversationStart(messages, config?.conversationStartTs);
 
-  let userPrompt, systemPrompt;
+  let userPrompt;
   if (customerType === 'gym') {
     const workoutLog = await fetchWorkoutLog(phoneKey, 20);
     userPrompt = buildGymPrompt({ phone: phoneKey, user, config, messages, istNow: ist, workoutLog, mode: 'cron' });
-    systemPrompt = global?.prompts?.gym || SYSTEM_GYM_COACH;
   } else {
     userPrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
-    systemPrompt = global?.prompts?.coach || SYSTEM_COACH;
   }
+  const systemPrompt = resolveSystemPrompt(config, global, customerType);
   const draft = await callAnthropic(env, systemPrompt, userPrompt);
   if (!draft) throw new Error('Empty draft from Anthropic');
 
