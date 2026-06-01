@@ -7,6 +7,26 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="auth-overlay" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
+    <div class="auth-card">
+      <h2 id="auth-title">Accountability Partner</h2>
+      <p class="auth-subtitle">Sign in with your Firebase admin account.</p>
+      <form id="auth-form" autocomplete="on">
+        <label class="field">
+          <span>Email</span>
+          <input id="auth-email" type="email" autocomplete="username" autofocus required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="auth-password" type="password" autocomplete="current-password" required />
+        </label>
+        <button id="auth-signin-btn" type="submit" class="btn">Sign in</button>
+        <div id="auth-error" class="auth-error" role="alert"></div>
+        <a href="#" id="auth-signout-link" style="display:none">Sign out and try a different account</a>
+      </form>
+    </div>
+  </div>
+
   <div id="app">
     <aside class="sidebar">
       <header class="sidebar-header">
@@ -17,6 +37,10 @@
         <button id="add-customer-btn" class="icon-btn" title="Add customer" aria-label="Add customer">&#x2795;</button>
         <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
       </header>
+      <div id="auth-who-row" class="auth-who-row" style="display:none">
+        Signed in as <span id="auth-who"></span>
+        <button id="auth-signout-btn" class="btn-link" type="button">Sign out</button>
+      </div>
       <div class="customer-list">
         <div class="empty-list">Configure settings to load customers.</div>
       </div>

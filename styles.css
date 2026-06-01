@@ -1601,3 +1601,80 @@ input.toggle {
   color: var(--text);
   background: var(--panel-2);
 }
+
+/* --- Firebase Auth gate (v1.048) --- */
+.auth-overlay[hidden] { display: none; }
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 20, 26, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+.auth-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px 32px;
+  width: min(380px, 90%);
+  box-shadow: var(--shadow);
+}
+.auth-card h2 { margin: 0 0 4px; color: var(--text); }
+.auth-subtitle { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+.auth-card .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.auth-card .field > span { font-size: 12px; color: var(--muted); }
+.auth-card input {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  font: inherit;
+}
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.auth-card .btn { width: 100%; padding: 10px 12px; margin-top: 4px; }
+.auth-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 10px;
+  min-height: 1em;
+}
+#auth-signout-link {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+#auth-signout-link:hover { color: var(--accent-hover); text-decoration: underline; }
+
+body.auth-locked > #app { filter: blur(2px); pointer-events: none; user-select: none; }
+
+.auth-who-row {
+  padding: 6px 16px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.auth-who-row #auth-who { color: var(--text); }
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  margin-left: auto;
+  text-decoration: underline;
+}
+.btn-link:hover { color: var(--accent-hover); }
