@@ -5,8 +5,19 @@ compatibility_date = "2025-06-01"
 [triggers]
 crons = ["*/15 * * * *"]
 
+# Service binding to ferra-ai-gateway. All Claude calls flow through this
+# binding rather than api.anthropic.com directly — see ferra-ai-gateway for
+# per-dashboard cost attribution, rate-limiting, and key rotation. The host
+# in the Request URL is ignored when calling a service-bound worker.
+[[services]]
+binding = "AI_GATEWAY"
+service = "ferra-ai-gateway"
+
 # Secrets (set with `wrangler secret put <NAME>`):
 #   FERRA_API_KEY        — Ferra export key
 #   PERISKOPE_API_KEY    — Periskope bearer token
 #   PERISKOPE_PHONE      — Periskope org phone (digits only)
-#   ANTHROPIC_API_KEY    — Anthropic API key
+#   AI_GATEWAY_KEY       — gk_ap_... key issued by ferra-ai-gateway
+#   ANTHROPIC_API_KEY    — DEPRECATED, kept for one-week rollback window only.
+#                          Delete with `wrangler secret delete ANTHROPIC_API_KEY`
+#                          after the gateway has run cleanly.

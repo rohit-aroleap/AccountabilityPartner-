@@ -5,8 +5,11 @@
 
 const FERRA_EXPORT_URL = 'https://asia-south1-aroleap-fa76f.cloudfunctions.net/exportFerraDashboard';
 const PERISKOPE_BASE = 'https://api.periskope.app/v1';
-const ANTHROPIC_BASE = 'https://api.anthropic.com/v1';
-const ANTHROPIC_VERSION = '2023-06-01';
+// AI calls go through ferra-ai-gateway via the AI_GATEWAY service binding.
+// The "internal" host is arbitrary — service bindings ignore the host and
+// route directly to the bound worker. We pass x-gateway-key for auth and
+// x-feature for per-call-site attribution in the gateway's usage logs.
+const AI_GATEWAY_URL = 'https://internal/v1/messages';
 
 const FB_URL = 'https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app';
 const FB_ROOT = 'accountabilityPartner/v1';
@@ -306,7 +309,8 @@ async function handlePeriskopeMessages(request, env, corsHeaders) {
 
 async function handleAnthropic(request, env, corsHeaders) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
-  if (!env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY secret not set' }, corsHeaders, 500);
+  const gwErr = aiGatewayPrereqError(env);
+  if (gwErr) return json({ error: gwErr }, corsHeaders, 500);
 
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Invalid JSON body' }, corsHeaders, 400); }
@@ -317,11 +321,9 @@ async function handleAnthropic(request, env, corsHeaders) {
   const model = ALLOWED_MODELS.has(body.model) ? body.model : DEFAULT_MODEL;
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 512, 16), 2048);
 
-  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
-    method: 'POST',
-    headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: body.system || '', messages: body.messages }),
-  });
+  const res = await callAiGateway(env, {
+    model, max_tokens: maxTokens, system: body.system || '', messages: body.messages,
+  }, 'manual-draft');
   const text = await res.text();
   return new Response(text, { status: res.status, headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' } });
 }
@@ -686,7 +688,7 @@ If it doesn't match any option → valid: false, reason: "no-match".
 If genuinely ambiguous between options → valid: false, reason: "ambiguous".`;
   let text;
   try {
-    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 100);
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 100, 'onboarding-parse');
   } catch {
     return { valid: false, reason: 'llm-error' };
   }
@@ -907,7 +909,7 @@ async function processInboundReply(env, payload) {
     });
   }
   const systemPrompt = resolveSystemPrompt(config, global, customerType);
-  const draft = await callAnthropic(env, systemPrompt, userPrompt);
+  const draft = await callAnthropic(env, systemPrompt, userPrompt, 'webhook-reply');
   if (!draft) throw new Error('Empty draft from Anthropic');
 
   // For gym customers, fire-and-forget Haiku call to extract workout if reported
@@ -1240,7 +1242,7 @@ async function fireScheduledReminder(env, phoneKey, rid, rem, config, global, is
   const userPrompt = basePrompt + '\n' + reminderTail;
   const systemPrompt = resolveSystemPrompt(config, global, customerType);
 
-  const draft = await callAnthropic(env, systemPrompt, userPrompt);
+  const draft = await callAnthropic(env, systemPrompt, userPrompt, 'scheduled-reminder');
   if (!draft) throw new Error('Empty draft for reminder');
 
   if (config.autoCoachMode === 'auto-send') {
@@ -1405,7 +1407,7 @@ async function processCustomer(env, phoneKey, config, workout, ist, today, globa
     userPrompt = buildCronCheckinPrompt({ phone: phoneKey, user, raw: workout, messages, istNow: ist });
   }
   const systemPrompt = resolveSystemPrompt(config, global, customerType);
-  const draft = await callAnthropic(env, systemPrompt, userPrompt);
+  const draft = await callAnthropic(env, systemPrompt, userPrompt, 'cron-checkin');
   if (!draft) throw new Error('Empty draft from Anthropic');
 
   if (config.autoCoachMode === 'auto-send') {
@@ -1499,20 +1501,16 @@ async function sendViaPeriskope(env, chatId, message) {
   return r.json();
 }
 
-async function callAnthropic(env, system, userPrompt) {
-  const r = await fetch(`${ANTHROPIC_BASE}/messages`, {
-    method: 'POST',
-    headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: DEFAULT_MODEL,
-      max_tokens: 600,
-      system,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-  });
+async function callAnthropic(env, system, userPrompt, feature = 'unspecified') {
+  const r = await callAiGateway(env, {
+    model: DEFAULT_MODEL,
+    max_tokens: 600,
+    system,
+    messages: [{ role: 'user', content: userPrompt }],
+  }, feature);
   if (!r.ok) {
     trackAiUsage(0, 0, DEFAULT_MODEL, true).catch(() => {});
-    throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    throw new Error(`AI gateway ${r.status}: ${(await r.text()).slice(0, 200)}`);
   }
   const body = await r.json();
   const usage = body.usage || {};
@@ -1808,7 +1806,7 @@ Examples:
 
   let text;
   try {
-    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 200);
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 200, 'extract-workout');
   } catch (err) {
     console.error('Haiku extract call failed:', err.message);
     return;
@@ -1873,7 +1871,7 @@ Examples:
 
   let text;
   try {
-    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 500);
+    text = await callAnthropicWithModel(env, '', prompt, 'claude-haiku-4-5-20251001', 500, 'extract-reminders');
   } catch (err) {
     console.error('reminder extract LLM call failed:', err.message);
     return;
@@ -1916,20 +1914,39 @@ Examples:
   });
 }
 
-async function callAnthropicWithModel(env, system, userPrompt, model, maxTokens) {
-  const r = await fetch(`${ANTHROPIC_BASE}/messages`, {
-    method: 'POST',
-    headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userPrompt }] }),
-  });
+async function callAnthropicWithModel(env, system, userPrompt, model, maxTokens, feature = 'unspecified') {
+  const r = await callAiGateway(env, {
+    model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userPrompt }],
+  }, feature);
   if (!r.ok) {
     trackAiUsage(0, 0, model, true).catch(() => {});
-    throw new Error(`Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    throw new Error(`AI gateway ${r.status}: ${(await r.text()).slice(0, 200)}`);
   }
   const body = await r.json();
   const usage = body.usage || {};
   trackAiUsage(usage.input_tokens || 0, usage.output_tokens || 0, body.model || model, false).catch(() => {});
   return (body.content || []).find(c => c.type === 'text')?.text?.trim() || '';
+}
+
+// --- AI gateway (ferra-ai-gateway via service binding) ---
+function aiGatewayPrereqError(env) {
+  if (!env.AI_GATEWAY) return 'AI_GATEWAY service binding not configured in wrangler.toml';
+  if (!env.AI_GATEWAY_KEY) return 'AI_GATEWAY_KEY secret not set';
+  return null;
+}
+
+async function callAiGateway(env, anthropicBody, feature) {
+  if (!env.AI_GATEWAY) throw new Error('AI_GATEWAY service binding not configured');
+  if (!env.AI_GATEWAY_KEY) throw new Error('AI_GATEWAY_KEY secret not set');
+  return env.AI_GATEWAY.fetch(new Request(AI_GATEWAY_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-gateway-key': env.AI_GATEWAY_KEY,
+      'x-feature': feature || 'unspecified',
+    },
+    body: JSON.stringify(anthropicBody),
+  }));
 }
 
 async function fbPushAndGetKey(path, value) {

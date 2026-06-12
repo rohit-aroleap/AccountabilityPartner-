@@ -26,7 +26,12 @@ Guards: skips paused customers, daily cap (3/day), quiet hours (21:00–08:00 IS
 | `FERRA_API_KEY` | `ferra-cust-data-27` |
 | `PERISKOPE_API_KEY` | The full `eyJ…` token |
 | `PERISKOPE_PHONE` | Channel phone digits (e.g., `919187651332`) |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `AI_GATEWAY_KEY` | `gk_ap_…` key issued by `ferra-ai-gateway` |
+| ~~`ANTHROPIC_API_KEY`~~ | _Deprecated — kept for one-week rollback only. Delete after the gateway has run cleanly._ |
+
+Claude calls go through the `AI_GATEWAY` service binding (see `wrangler.toml`) →
+`ferra-ai-gateway` worker → Anthropic. This worker no longer hits
+`api.anthropic.com` directly.
 
 ## Deploy
 
@@ -38,7 +43,7 @@ wrangler login
 wrangler secret put FERRA_API_KEY
 wrangler secret put PERISKOPE_API_KEY
 wrangler secret put PERISKOPE_PHONE
-wrangler secret put ANTHROPIC_API_KEY
+wrangler secret put AI_GATEWAY_KEY
 wrangler deploy
 ```
 
