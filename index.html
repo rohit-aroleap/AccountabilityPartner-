@@ -1,107 +1,70 @@
 <!DOCTYPE html>
+<!--
+  Temporarily disabled (2026-06-12) — the AccountabilityPartner app
+  subscribes to a single 25 MB blob at /accountabilityPartner in the
+  shared motherofdashboard Firebase RTDB. With every page load
+  re-downloading the whole blob (no IndexedDB persistence), it was
+  responsible for the largest share of the project's monthly download
+  cost (28.7 GB used / 10 GB Spark-plan cap, June 2026 billing period).
+
+  To re-enable: `git revert <this commit>` and push. The original
+  index.html + js/ + styles.css are untouched in git history; this
+  page is the only file replaced.
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Accountability Partner</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>Accountability Partner — paused</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 60%, #e0e7ff 100%);
+      color: #1f2937;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      max-width: 460px;
+      background: white;
+      border-radius: 18px;
+      padding: 36px 32px;
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.10);
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      font-weight: 700;
+      color: #4c1d95;
+    }
+    p {
+      margin: 8px 0;
+      color: #4b5563;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .icon {
+      font-size: 40px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+  </style>
 </head>
 <body>
-  <div id="auth-overlay" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
-    <div class="auth-card">
-      <h2 id="auth-title">Accountability Partner</h2>
-      <p class="auth-subtitle">Sign in with your Firebase admin account.</p>
-      <form id="auth-form" autocomplete="on">
-        <label class="field">
-          <span>Email</span>
-          <input id="auth-email" type="email" autocomplete="username" autofocus required />
-        </label>
-        <label class="field">
-          <span>Password</span>
-          <input id="auth-password" type="password" autocomplete="current-password" required />
-        </label>
-        <button id="auth-signin-btn" type="submit" class="btn">Sign in</button>
-        <div id="auth-error" class="auth-error" role="alert"></div>
-        <a href="#" id="auth-signout-link" style="display:none">Sign out and try a different account</a>
-      </form>
-    </div>
-  </div>
-
-  <div id="app">
-    <aside class="sidebar">
-      <header class="sidebar-header">
-        <div class="sidebar-title">
-          <h1>Accountability Partner</h1>
-          <span class="ver" data-version></span>
-        </div>
-        <button id="add-customer-btn" class="icon-btn" title="Add customer" aria-label="Add customer">&#x2795;</button>
-        <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
-      </header>
-      <div id="auth-who-row" class="auth-who-row" style="display:none">
-        Signed in as <span id="auth-who"></span>
-        <button id="auth-signout-btn" class="btn-link" type="button">Sign out</button>
-      </div>
-      <div class="customer-list">
-        <div class="empty-list">Configure settings to load customers.</div>
-      </div>
-    </aside>
-
-    <main class="chat-pane">
-      <div class="empty-chat">
-        <h2>Pick a customer to start a conversation</h2>
-        <p>Messages send via Periskope through your Worker proxy.</p>
-      </div>
-    </main>
-  </div>
-
-  <div id="config-banner" class="banner" hidden>
-    <span>Settings incomplete</span>
-    <button onclick="document.getElementById('open-settings').click()">Configure</button>
-  </div>
-
-  <div id="settings-modal" class="modal" role="dialog" aria-modal="true">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h2>Settings</h2>
-        <button id="close-settings" class="icon-btn" aria-label="Close">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="tune-ai-launcher">
-          <button type="button" class="btn btn-link-row" id="open-tune-ai">
-            <span>🎛 Tune AI — prompts, safety limits, kill switch, sandbox</span>
-            <span class="chev">→</span>
-          </button>
-        </div>
-        <form id="settings-form">
-          <div class="field">
-            <label for="workerUrl">Cloudflare Worker URL</label>
-            <input type="url" id="workerUrl" name="workerUrl" placeholder="https://accountability-partner.your-subdomain.workers.dev" autocomplete="off" />
-            <div class="help">Proxies Ferra workout export + Periskope send/receive. Set <code>FERRA_API_KEY</code>, <code>PERISKOPE_API_KEY</code>, <code>PERISKOPE_PHONE</code> as Worker secrets.</div>
-          </div>
-          <div class="field">
-            <label for="customerPhonesRaw">Customer phone numbers (one per line)</label>
-            <textarea id="customerPhonesRaw" name="customerPhonesRaw" rows="5" placeholder="+919876543210&#10;+919123456789" autocomplete="off"></textarea>
-            <div class="help">Allowlist — only these phones appear in the sidebar. Matched against the Ferra export.</div>
-          </div>
-          <div class="field">
-            <label for="anthropicModel">Claude Model</label>
-            <select id="anthropicModel" name="anthropicModel">
-              <option value="claude-opus-4-7">claude-opus-4-7 (best quality)</option>
-              <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
-              <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
-            </select>
-            <div class="help">Claude calls flow through <code>ferra-ai-gateway</code> via the Worker's <code>AI_GATEWAY</code> service binding (per-dashboard cost attribution + rate limiting).</div>
-          </div>
-        </form>
-      </div>
-      <div class="modal-footer">
-        <span id="settings-status" class="status"></span>
-        <button type="button" class="btn-ghost btn" onclick="document.getElementById('close-settings').click()">Cancel</button>
-        <button type="submit" form="settings-form" class="btn">Save</button>
-      </div>
-    </div>
-  </div>
-
-  <script type="module" src="js/app.js"></script>
+  <main class="card">
+    <div class="icon">⏸</div>
+    <h1>Accountability Partner is paused</h1>
+    <p>The app is temporarily offline while we work on a more efficient way to load your accountability history.</p>
+    <p>We'll bring it back as soon as the update is ready. No data has been lost.</p>
+  </main>
 </body>
 </html>
