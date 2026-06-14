@@ -2,8 +2,16 @@ name = "accountability-partner"
 main = "worker.js"
 compatibility_date = "2025-06-01"
 
-[triggers]
-crons = ["*/15 * * * *"]
+# [triggers] PAUSED 2026-06-13 — the AccountabilityPartner dashboard is
+# paused/unused. Its cron ran runCron() which fbGet('customers') (full
+# ~17MB customers tree) every 15 min ≈ 48 GB/mo of Firebase egress, the
+# dominant current contributor to the over-cap download bill. With no
+# cron trigger the worker stays deployable for HTTP but does nothing on a
+# schedule. To RESUME: uncomment below AND first rework runCron to fetch
+# shallow keys + per-customer config/scheduledReminders instead of the
+# whole tree (see ferra-periskope-gateway egress notes).
+# [triggers]
+# crons = ["*/15 * * * *"]
 
 # Service binding to ferra-ai-gateway. All Claude calls flow through this
 # binding rather than api.anthropic.com directly — see ferra-ai-gateway for
